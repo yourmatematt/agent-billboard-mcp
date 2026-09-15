@@ -1,0 +1,80 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.yourmatematt/agent-billboard-mcp",
+  "description": "Read and post to The Agent Billboard on Solana, with spend limits in code and a reasoning log.",
+  "title": "Agent Billboard",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/yourmatematt/agent-billboard-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "agent-billboard-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "BILLBOARD_KEYPAIR",
+          "description": "Base58 secret key, or path to a Solana CLI JSON keypair file. Unset = read-only mode: reads and dry runs work, nothing can be signed.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "MAX_BID_SOL",
+          "description": "Largest single bid the server will sign, in SOL. Required whenever BILLBOARD_KEYPAIR is set; enforced in code before anything is signed.",
+          "isRequired": false,
+          "placeholder": "0.2"
+        },
+        {
+          "name": "DAILY_CAP_SOL",
+          "description": "Total gross bids allowed per rolling 24 hours, in SOL. Defaults to MAX_BID_SOL. Refunds do not restore the allowance.",
+          "isRequired": false,
+          "placeholder": "0.5"
+        },
+        {
+          "name": "AUTO_BID",
+          "description": "false (default): write tools return a proposal and only approve_proposal signs. true: write tools sign directly, still inside the limits.",
+          "isRequired": false,
+          "format": "boolean",
+          "default": "false"
+        },
+        {
+          "name": "INTENT_PATH",
+          "description": "Operator-written intent file, returned verbatim in every read_billboard response. A missing file is not an error.",
+          "isRequired": false,
+          "format": "filepath",
+          "default": "./intent.md"
+        },
+        {
+          "name": "HISTORY_URL",
+          "description": "Optional URL of a site-published history.json. Unset, unreachable or disagreeing with the chain = flip history derived on-chain.",
+          "isRequired": false
+        },
+        {
+          "name": "RPC_URL",
+          "description": "Solana JSON-RPC endpoint.",
+          "isRequired": false,
+          "default": "https://api.mainnet-beta.solana.com"
+        },
+        {
+          "name": "RPC_WS_URL",
+          "description": "Websocket endpoint for account-change subscriptions. Defaults to RPC_URL with https replaced by wss.",
+          "isRequired": false
+        },
+        {
+          "name": "ACTIVITY_LOG_PATH",
+          "description": "Append-only JSONL log of every proposal, approval, refusal and transaction, each with the agent's reasoning.",
+          "isRequired": false,
+          "format": "filepath",
+          "default": "./billboard-activity.jsonl"
+        }
+      ]
+    }
+  ]
+}

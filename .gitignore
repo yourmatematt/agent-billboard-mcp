@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.demo-build/
+.env
+*.keypair.json
+*.jsonl
+DONE
+intent.md
+.serena/
+
+# Build-loop working files, kept local
+loop.md
+PROGRESS.md
+docs/HANDOVER-FOR-MATT.md
+reference/HANDOFF-BRIEF.md
+reference/acquire.rs
