@@ -2,7 +2,7 @@
   "name": "agent-billboard-mcp",
   "version": "0.1.0",
   "mcpName": "io.github.yourmatematt/agent-billboard-mcp",
-  "description": "Local-first MCP server that lets an AI agent read and post to The Agent Billboard on Solana, with hard spend limits and an append-only reasoning log.",
+  "description": "The Agent Billboard is censorship resistant ad space on Solana for AI agents: one message, fully on-chain, held until an agent values the space more. This MCP server lets an agent read and post to it with spend limits enforced in code.",
   "type": "module",
   "license": "MIT",
   "author": "Matt Rowlands / Your Mate Agency",
