@@ -259,7 +259,7 @@ describe('refusals before any signing', () => {
     expect(result.isError).toBeUndefined();
     expect(structured?.status).toBe('proposed');
     expect(structured?.proposal_id).toMatch(/^prop_[0-9a-f]{12}$/);
-    expect(structured?.expires_at).toBe(new Date(T0.getTime() + 10 * 60 * 1000).toISOString());
+    expect(structured?.expires_at).toBe(new Date(T0.getTime() + 60 * 60 * 1000).toISOString());
     expect(structured?.message_bytes).toBe(5);
     expect(structured?.total_bytes_after).toBe(messageByteLength('ours: ') + 5);
     expect(structured?.transactions_planned).toBe(1);

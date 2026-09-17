@@ -16,6 +16,11 @@ import {
   loadKeypair,
   mergeDotenv,
 } from '../src/config.js';
+import {
+  DEFAULT_PROPOSAL_TTL_MIN,
+  MAX_PROPOSAL_TTL_MIN,
+  MIN_PROPOSAL_TTL_MIN,
+} from '../src/proposals.js';
 
 const kp = Keypair.generate();
 const SECRET_B58 = bs58.encode(kp.secretKey);
@@ -220,6 +225,40 @@ describe('validation of the other variables', () => {
     expectConfigError(() => load({ AUTO_BID: 'yes' }), /AUTO_BID must be "true" or "false"/);
   });
 
+  it('PROPOSAL_TTL_MIN defaults to 60 minutes', () => {
+    expect(load({}).proposalTtlMin).toBe(DEFAULT_PROPOSAL_TTL_MIN);
+    expect(DEFAULT_PROPOSAL_TTL_MIN).toBe(60);
+  });
+
+  it('PROPOSAL_TTL_MIN accepts whole minutes from 1 to 1440', () => {
+    expect(load({ PROPOSAL_TTL_MIN: '1' }).proposalTtlMin).toBe(MIN_PROPOSAL_TTL_MIN);
+    expect(load({ PROPOSAL_TTL_MIN: ' 15 ' }).proposalTtlMin).toBe(15);
+    expect(load({ PROPOSAL_TTL_MIN: '1440' }).proposalTtlMin).toBe(MAX_PROPOSAL_TTL_MIN);
+  });
+
+  it('PROPOSAL_TTL_MIN rejects fractions, non-numbers and out-of-range values', () => {
+    expectConfigError(
+      () => load({ PROPOSAL_TTL_MIN: '1.5' }),
+      /PROPOSAL_TTL_MIN must be a whole number of minutes/,
+    );
+    expectConfigError(
+      () => load({ PROPOSAL_TTL_MIN: 'an hour' }),
+      /PROPOSAL_TTL_MIN must be a whole number of minutes/,
+    );
+    expectConfigError(
+      () => load({ PROPOSAL_TTL_MIN: '-5' }),
+      /PROPOSAL_TTL_MIN must be a whole number of minutes/,
+    );
+    expectConfigError(
+      () => load({ PROPOSAL_TTL_MIN: '0' }),
+      /PROPOSAL_TTL_MIN must be between 1 and 1440 minutes/,
+    );
+    expectConfigError(
+      () => load({ PROPOSAL_TTL_MIN: '1441' }),
+      /PROPOSAL_TTL_MIN must be between 1 and 1440 minutes/,
+    );
+  });
+
   it('RPC_URL must be http(s); the websocket URL is derived from it', () => {
     expectConfigError(() => load({ RPC_URL: 'ftp://x' }), /RPC_URL must use http or https/);
     expectConfigError(() => load({ RPC_URL: 'not a url' }), /RPC_URL must be a valid URL/);
@@ -313,6 +352,7 @@ describe('secrecy', () => {
     expect(view).not.toContain(Array.from(kp.secretKey.slice(0, 8)).join(','));
     expect(view).toContain('"mode":"auto"');
     expect(view).toContain('"max_bid_lamports":"250000000"');
+    expect(view).toContain('"proposal_ttl_min":60');
   });
 
   it('every error path involving the key omits the base58 secret', () => {
@@ -343,6 +383,7 @@ describe('secrecy', () => {
         'HISTORY_URL',
         'INTENT_PATH',
         'MAX_BID_SOL',
+        'PROPOSAL_TTL_MIN',
         'RPC_URL',
         'RPC_WS_URL',
       ].sort(),

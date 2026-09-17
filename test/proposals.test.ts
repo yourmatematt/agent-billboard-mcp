@@ -8,6 +8,9 @@ import { ActivityLog } from '../src/log/activity.js';
 import type { BillboardState } from '../src/program/layout.js';
 import { solToLamports } from '../src/program/math.js';
 import {
+  DEFAULT_PROPOSAL_TTL_MIN,
+  MAX_PROPOSAL_TTL_MIN,
+  MIN_PROPOSAL_TTL_MIN,
   PROPOSAL_RETENTION_MS,
   PROPOSAL_TTL_MS,
   ProposalError,
@@ -76,7 +79,7 @@ function store(ttlMs?: number): ProposalStore {
 const REASON = 'Worth 0.101 SOL to us this week.';
 
 describe('ProposalStore.create', () => {
-  it('stores a pending proposal with a 10-minute deadline and logs `proposed`', () => {
+  it('stores a pending proposal with the default hour-long deadline and logs `proposed`', () => {
     const s = store();
     const before = state();
     const p = s.create({
@@ -89,7 +92,8 @@ describe('ProposalStore.create', () => {
     expect(p.id).toMatch(/^prop_[0-9a-f]{12}$/);
     expect(p.createdAt).toEqual(T0);
     expect(p.expiresAt.getTime() - p.createdAt.getTime()).toBe(PROPOSAL_TTL_MS);
-    expect(PROPOSAL_TTL_MS).toBe(10 * 60 * 1000);
+    expect(PROPOSAL_TTL_MS).toBe(60 * 60 * 1000);
+    expect(DEFAULT_PROPOSAL_TTL_MIN).toBe(60);
     expect(s.lookup(p.id)).toEqual({ status: 'pending', proposal: p });
     expect(s.pendingCount).toBe(1);
 
@@ -147,6 +151,170 @@ describe('ProposalStore.create', () => {
     ).toThrow(ProposalError);
     expect(() => store(0)).toThrow(ProposalError);
     expect(() => store(1.5)).toThrow(ProposalError);
+  });
+});
+
+describe('one open proposal per tool', () => {
+  it('a second proposal from the same tool supersedes the first, both ids in the log', () => {
+    const s = store();
+    const before = state();
+    const first = s.create({
+      tool: 'acquire_posting_rights',
+      action: acquireAction(before),
+      reasoning: REASON,
+      before,
+    });
+
+    clock = new Date(T0.getTime() + 30 * 60 * 1000);
+    const second = s.create({
+      tool: 'acquire_posting_rights',
+      action: acquireAction(before, '0.12'),
+      reasoning: 'The board turned over twice today; worth 0.12 SOL now.',
+      before,
+    });
+
+    expect(second.id).not.toBe(first.id);
+    expect(s.pendingCount).toBe(1);
+    expect(s.openFor('acquire_posting_rights')).toBe(second);
+    expect(s.lookup(second.id)).toEqual({ status: 'pending', proposal: second });
+    expect(s.lookup(first.id)).toEqual({
+      status: 'superseded',
+      proposal: first,
+      settledAt: clock,
+      supersededBy: second.id,
+    });
+
+    // superseded is written before the replacement's proposed line.
+    const entries = log.entries();
+    expect(entries.map((e) => e.event)).toEqual(['proposed', 'superseded', 'proposed']);
+    expect(entries[1]).toMatchObject({
+      ts: clock.toISOString(),
+      event: 'superseded',
+      tool: 'acquire_posting_rights',
+      proposal_id: first.id,
+      superseded_by: second.id,
+      bid_sol: '0.101',
+      reasoning: REASON,
+    });
+    expect(entries[2]).toMatchObject({ proposal_id: second.id, bid_sol: '0.12' });
+  });
+
+  it('a superseded proposal can no longer be approved or settled', () => {
+    const s = store();
+    const before = state();
+    const first = s.create({
+      tool: 'clear_message',
+      action: { kind: 'clear' },
+      reasoning: REASON,
+      before,
+    });
+    s.create({ tool: 'clear_message', action: { kind: 'clear' }, reasoning: REASON, before });
+
+    expect(() => s.approve(first.id, before)).toThrow(/already superseded/);
+    expect(() => s.settle(first.id, 'stale')).toThrow(/already superseded/);
+  });
+
+  it('each tool keeps its own open proposal', () => {
+    const s = store();
+    const before = state();
+    const acquire = s.create({
+      tool: 'acquire_posting_rights',
+      action: acquireAction(before),
+      reasoning: REASON,
+      before,
+    });
+    const append = s.create({
+      tool: 'append_message',
+      action: appendAction(before),
+      reasoning: REASON,
+      before,
+    });
+    const clear = s.create({
+      tool: 'clear_message',
+      action: { kind: 'clear' },
+      reasoning: REASON,
+      before,
+    });
+
+    expect(s.pendingCount).toBe(3);
+    expect(s.openFor('acquire_posting_rights')).toBe(acquire);
+    expect(s.openFor('append_message')).toBe(append);
+    expect(s.openFor('clear_message')).toBe(clear);
+    expect(log.entries().map((e) => e.event)).toEqual(['proposed', 'proposed', 'proposed']);
+
+    // Replacing one leaves the other two alone.
+    const acquire2 = s.create({
+      tool: 'acquire_posting_rights',
+      action: acquireAction(before),
+      reasoning: REASON,
+      before,
+    });
+    expect(s.pendingCount).toBe(3);
+    expect(s.openFor('acquire_posting_rights')).toBe(acquire2);
+    expect(s.lookup(acquire.id).status).toBe('superseded');
+    expect(s.lookup(append.id).status).toBe('pending');
+    expect(s.lookup(clear.id).status).toBe('pending');
+  });
+
+  it('an expired proposal is not superseded again by the next one', () => {
+    const s = store();
+    const before = state();
+    const first = s.create({
+      tool: 'clear_message',
+      action: { kind: 'clear' },
+      reasoning: REASON,
+      before,
+    });
+
+    clock = new Date(T0.getTime() + PROPOSAL_TTL_MS);
+    s.create({ tool: 'clear_message', action: { kind: 'clear' }, reasoning: REASON, before });
+
+    expect(s.lookup(first.id).status).toBe('expired');
+    expect(log.entries().map((e) => e.event)).toEqual(['proposed', 'expired', 'proposed']);
+  });
+
+  it('openFor returns null for a tool with nothing open', () => {
+    const s = store();
+    expect(s.openFor('append_message')).toBeNull();
+  });
+});
+
+describe('ProposalStore TTL', () => {
+  it('honours a custom ttl: pending at 59 minutes, expired at 61', () => {
+    const s = store(60 * 60 * 1000);
+    const before = state();
+    const p = s.create({
+      tool: 'acquire_posting_rights',
+      action: acquireAction(before),
+      reasoning: REASON,
+      before,
+    });
+    expect(p.expiresAt).toEqual(new Date(T0.getTime() + 60 * 60 * 1000));
+
+    clock = new Date(T0.getTime() + 59 * 60 * 1000);
+    expect(s.lookup(p.id).status).toBe('pending');
+
+    clock = new Date(T0.getTime() + 61 * 60 * 1000);
+    expect(s.lookup(p.id).status).toBe('expired');
+  });
+
+  it('a short ttl expires a proposal a minute after it was made', () => {
+    const s = store(MIN_PROPOSAL_TTL_MIN * 60 * 1000);
+    const before = state();
+    const p = s.create({
+      tool: 'clear_message',
+      action: { kind: 'clear' },
+      reasoning: REASON,
+      before,
+    });
+    clock = new Date(T0.getTime() + 59_000);
+    expect(s.lookup(p.id).status).toBe('pending');
+    clock = new Date(T0.getTime() + 60_000);
+    expect(s.lookup(p.id).status).toBe('expired');
+  });
+
+  it('the longest accepted ttl is a day', () => {
+    expect(MAX_PROPOSAL_TTL_MIN * 60 * 1000).toBe(24 * 60 * 60 * 1000);
   });
 });
 
@@ -282,9 +450,10 @@ describe('approve and settle', () => {
       reasoning: REASON,
       before,
     });
+    // Different tools: one open proposal each, so neither supersedes the other.
     const b = s.create({
-      tool: 'clear_message',
-      action: { kind: 'clear' },
+      tool: 'acquire_posting_rights',
+      action: acquireAction(before),
       reasoning: REASON,
       before,
     });

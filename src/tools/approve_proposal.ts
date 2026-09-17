@@ -6,9 +6,12 @@
  * So it does not trust the proposal blindly either:
  *
  *   1. look the proposal up            (refused: unknown_proposal, expired,
- *                                        already_approved, already_settled;
- *                                        nothing logged except `expired`,
- *                                        which the store writes on sweep)
+ *                                        superseded, already_approved,
+ *                                        already_settled; nothing logged
+ *                                        except `expired`, which the store
+ *                                        writes on sweep, and `superseded`,
+ *                                        written when the replacement was
+ *                                        made)
  *   2. re-read the billboard           (throws -> isError text)
  *   3. compare with the proposal's     (refused: stale, when poster, amount
  *      `before` state                   or message changed; the proposal is
@@ -79,6 +82,7 @@ export type ApproveStatus = (typeof APPROVE_STATUSES)[number];
 export const APPROVE_ERRORS = [
   'unknown_proposal',
   'expired',
+  'superseded',
   'already_approved',
   'already_settled',
   'stale',
@@ -103,6 +107,10 @@ export const approveOutputShape = {
   error: z.enum(APPROVE_ERRORS).optional(),
   reason: z.string().optional().describe('Human-readable detail for refused and failed outcomes.'),
   proposal_id: z.string(),
+  superseded_by: z
+    .string()
+    .optional()
+    .describe('On error `superseded`: the id of the newer proposal to approve instead.'),
   kind: z.enum(['acquire', 'append', 'clear']).optional(),
   tool: z.string().optional().describe('The tool that made the proposal.'),
   reasoning: z.string().optional().describe('The reasoning given when the proposal was made.'),
@@ -199,7 +207,13 @@ export function describeChange(before: BillboardState, now: BillboardState): str
 function lookupRefusal(
   lookup: ProposalLookup,
   proposalId: string,
-): { error: ApproveErrorCode; reason: string; proposal: Proposal | null } | null {
+  ttlMinutes: number,
+): {
+  error: ApproveErrorCode;
+  reason: string;
+  proposal: Proposal | null;
+  supersededBy?: string;
+} | null {
   switch (lookup.status) {
     case 'pending':
       return null;
@@ -207,7 +221,8 @@ function lookupRefusal(
       return {
         error: 'unknown_proposal',
         reason:
-          `no proposal ${proposalId} is known to this server. Proposals live in memory for 10 minutes; ` +
+          `no proposal ${proposalId} is known to this server. Proposals live in memory for ` +
+          `${ttlMinutes} minute${ttlMinutes === 1 ? '' : 's'}; ` +
           'make a new one with acquire_posting_rights, append_message or clear_message.',
         proposal: null,
       };
@@ -216,6 +231,16 @@ function lookupRefusal(
         error: 'expired',
         reason: `proposal ${proposalId} expired at ${lookup.proposal.expiresAt.toISOString()}; make a new one.`,
         proposal: lookup.proposal,
+      };
+    case 'superseded':
+      return {
+        error: 'superseded',
+        reason:
+          `proposal ${proposalId} was replaced at ${lookup.settledAt.toISOString()} by proposal ` +
+          `${lookup.supersededBy}, which ${lookup.proposal.tool} made against a later read of the ` +
+          'billboard. Nothing was signed. Approve that proposal instead if the owner said yes to it.',
+        proposal: lookup.proposal,
+        supersededBy: lookup.supersededBy,
       };
     case 'approved':
       return {
@@ -256,13 +281,14 @@ export async function approveProposal(
   }
 
   const lookup = proposals.lookup(proposalId);
-  const refusal = lookupRefusal(lookup, proposalId);
+  const refusal = lookupRefusal(lookup, proposalId, config.proposalTtlMin);
   if (refusal !== null) {
     return {
       ...(refusal.proposal === null
         ? { proposal_id: proposalId }
         : describeProposal(refusal.proposal)),
       ...EMPTY_EXECUTION,
+      ...(refusal.supersededBy === undefined ? {} : { superseded_by: refusal.supersededBy }),
       status: 'refused',
       error: refusal.error,
       reason: refusal.reason,
@@ -428,8 +454,10 @@ export function registerApproveProposal(server: McpServer, context: ServerContex
         'Sign a proposal made by acquire_posting_rights, append_message or clear_message under ' +
         'AUTO_BID=false. Re-reads the billboard and refuses if the poster, amount or message ' +
         'changed since the proposal (stale), re-checks MAX_BID_SOL and DAILY_CAP_SOL, then ' +
-        'executes and logs. Proposals expire after 10 minutes and can be approved once. This is ' +
-        'the call to put a permission prompt on: the server cannot see the human, only this call.',
+        'executes and logs. Proposals expire after PROPOSAL_TTL_MIN minutes (default 60) and can ' +
+        'be approved once; a tool has one open proposal at a time, so proposing again refuses the ' +
+        'older id with `superseded` and names its replacement. This is the call to put a ' +
+        'permission prompt on: the server cannot see the human, only this call.',
       inputSchema: approveInputShape,
       outputSchema: approveOutputShape,
       annotations: {

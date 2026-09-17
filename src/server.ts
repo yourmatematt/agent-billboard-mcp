@@ -80,7 +80,12 @@ export function createContext(
           { now },
         )
       : null;
-  const proposals = new ProposalStore({ activityLog, now, warn });
+  const proposals = new ProposalStore({
+    activityLog,
+    now,
+    warn,
+    ttlMs: config.proposalTtlMin * 60 * 1000,
+  });
   const fetchImpl = options.fetch ?? globalThis.fetch;
   return { config, rpc, activityLog, reader, limits, proposals, now, warn, fetch: fetchImpl };
 }

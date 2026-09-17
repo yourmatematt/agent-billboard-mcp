@@ -23,6 +23,11 @@ import { parse as parseDotenv } from 'dotenv';
 import { z } from 'zod';
 
 import { solToLamports } from './program/math.js';
+import {
+  DEFAULT_PROPOSAL_TTL_MIN,
+  MAX_PROPOSAL_TTL_MIN,
+  MIN_PROPOSAL_TTL_MIN,
+} from './proposals.js';
 import { deriveWsUrl } from './rpc/SolanaRpc.js';
 
 export const DEFAULT_RPC_URL = 'https://api.mainnet-beta.solana.com';
@@ -35,6 +40,7 @@ export const CONFIG_VARS = [
   'MAX_BID_SOL',
   'DAILY_CAP_SOL',
   'AUTO_BID',
+  'PROPOSAL_TTL_MIN',
   'INTENT_PATH',
   'HISTORY_URL',
   'RPC_URL',
@@ -58,6 +64,8 @@ export interface Config {
   /** Total gross bids per rolling 24 h, in lamports. Null in read-only mode. */
   readonly dailyCapLamports: bigint | null;
   readonly autoBid: boolean;
+  /** How long a proposal stays open, in minutes. Only meaningful in propose mode. */
+  readonly proposalTtlMin: number;
   /** Absolute path to intent.md. The file may not exist; that is not an error. */
   readonly intentPath: string;
   readonly historyUrl: string | null;
@@ -100,6 +108,28 @@ const boolString = (name: ConfigVar) =>
     if (v === 'false') return false;
     ctx.addIssue({ code: 'custom', message: `${name} must be "true" or "false", got "${value}"` });
     return z.NEVER;
+  });
+
+/** A whole number of minutes inside an inclusive range. */
+const minutes = (name: ConfigVar, min: number, max: number) =>
+  z.string().transform((value, ctx) => {
+    const v = value.trim();
+    if (!/^\d+$/.test(v)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${name} must be a whole number of minutes, got "${value}"`,
+      });
+      return z.NEVER;
+    }
+    const parsed = Number(v);
+    if (parsed < min || parsed > max) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${name} must be between ${min} and ${max} minutes, got ${parsed}`,
+      });
+      return z.NEVER;
+    }
+    return parsed;
   });
 
 const httpUrl = (name: ConfigVar) =>
@@ -151,6 +181,9 @@ const envSchema = z.object({
   MAX_BID_SOL: solAmount('MAX_BID_SOL').optional(),
   DAILY_CAP_SOL: solAmount('DAILY_CAP_SOL').optional(),
   AUTO_BID: boolString('AUTO_BID').default(false),
+  PROPOSAL_TTL_MIN: minutes('PROPOSAL_TTL_MIN', MIN_PROPOSAL_TTL_MIN, MAX_PROPOSAL_TTL_MIN).default(
+    DEFAULT_PROPOSAL_TTL_MIN,
+  ),
   INTENT_PATH: nonEmptyPath('INTENT_PATH').default(DEFAULT_INTENT_PATH),
   HISTORY_URL: httpUrl('HISTORY_URL').optional(),
   RPC_URL: httpUrl('RPC_URL').default(DEFAULT_RPC_URL),
@@ -361,6 +394,7 @@ export function loadConfig(
     maxBidLamports,
     dailyCapLamports,
     autoBid: raw.AUTO_BID,
+    proposalTtlMin: raw.PROPOSAL_TTL_MIN,
     intentPath: resolve(cwd, raw.INTENT_PATH),
     historyUrl: raw.HISTORY_URL ?? null,
     rpcUrl: raw.RPC_URL,
@@ -380,6 +414,7 @@ export function describeConfig(config: Config): Record<string, unknown> {
     max_bid_lamports: config.maxBidLamports?.toString() ?? null,
     daily_cap_lamports: config.dailyCapLamports?.toString() ?? null,
     auto_bid: config.autoBid,
+    proposal_ttl_min: config.proposalTtlMin,
     intent_path: config.intentPath,
     history_url: config.historyUrl,
     rpc_url: config.rpcUrl,

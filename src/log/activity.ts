@@ -32,6 +32,7 @@ export const ACTIVITY_EVENTS = [
   'failed',
   'outbid_detected',
   'expired',
+  'superseded',
 ] as const;
 
 export type ActivityEvent = (typeof ACTIVITY_EVENTS)[number];
@@ -62,6 +63,8 @@ export const activityEntrySchema = z
     tool: z.string().min(1),
     reasoning: z.string().max(MAX_REASONING_CHARS).optional(),
     proposal_id: z.string().min(1).optional(),
+    /** On a `superseded` entry: the id of the proposal that replaced `proposal_id`. */
+    superseded_by: z.string().min(1).optional(),
     bid_sol: solString.optional(),
     tx: z.string().min(1).optional(),
     error: z.string().optional(),

@@ -376,7 +376,7 @@ describe('refusals before any signing', () => {
     expect(result.isError).toBeUndefined();
     expect(structured?.status).toBe('proposed');
     expect(structured?.proposal_id).toMatch(/^prop_[0-9a-f]{12}$/);
-    expect(structured?.expires_at).toBe(new Date(T0.getTime() + 10 * 60 * 1000).toISOString());
+    expect(structured?.expires_at).toBe(new Date(T0.getTime() + 60 * 60 * 1000).toISOString());
     expect(structured?.bid_sol).toBe('0.101');
     expect(structured?.previous_holder_receives_sol).toBe('0.1005');
     expect(structured?.creator_receives_sol).toBe('0.0005');

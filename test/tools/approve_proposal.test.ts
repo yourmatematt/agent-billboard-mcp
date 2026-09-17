@@ -421,7 +421,108 @@ describe('refusals at approval time', () => {
     expect(rpc.transactions).toHaveLength(1);
   });
 
-  it('expired: refused after 10 minutes with `expired` logged, nothing sent', async () => {
+  it('expired: PROPOSAL_TTL_MIN defaults to 60, so pending at 59 minutes and gone at 61', async () => {
+    const rpc = theirs();
+    const context = makeContext(rpc);
+    const { client } = await connect(context);
+    expect(context.config.proposalTtlMin).toBe(60);
+    const proposalId = await proposeAcquire(client);
+
+    clock = new Date(T0.getTime() + 59 * 60 * 1000);
+    const still = await callApprove(client, { proposal_id: proposalId });
+    expect(still.structured?.status).toBe('executed');
+
+    // The same proposal on a second server, left to run one minute past the
+    // hour instead. A fresh clock and a fresh board so nothing else differs.
+    clock = T0;
+    const laterRpc = theirs();
+    const laterContext = makeContext(laterRpc);
+    const { client: laterClient } = await connect(laterContext);
+    const later = await proposeAcquire(laterClient);
+
+    clock = new Date(T0.getTime() + 61 * 60 * 1000);
+    const { structured } = await callApprove(laterClient, { proposal_id: later });
+    expect(structured?.status).toBe('refused');
+    expect(structured?.error).toBe('expired');
+    expect(laterRpc.transactions).toHaveLength(0);
+  });
+
+  it('PROPOSAL_TTL_MIN sets the deadline the proposal reports and the sweep honours', async () => {
+    const rpc = theirs();
+    const context = makeContext(rpc, { ...proposeEnv, PROPOSAL_TTL_MIN: '5' });
+    const { client } = await connect(context);
+    const { structured: proposed } = await callAcquire(client, {
+      reasoning: REASON,
+      message: 'new message',
+    });
+    expect(proposed?.expires_at).toBe(new Date(T0.getTime() + 5 * 60 * 1000).toISOString());
+
+    clock = new Date(T0.getTime() + 5 * 60 * 1000);
+    const { structured } = await callApprove(client, { proposal_id: proposed!.proposal_id! });
+    expect(structured?.error).toBe('expired');
+    expect(rpc.transactions).toHaveLength(0);
+  });
+
+  it('superseded: a newer proposal from the same tool refuses the older id and names it', async () => {
+    const rpc = theirs();
+    const context = makeContext(rpc);
+    const { client } = await connect(context);
+    const first = await proposeAcquire(client);
+
+    clock = new Date(T0.getTime() + 20 * 60 * 1000);
+    const second = await proposeAcquire(client, { bid_sol: '0.12' });
+    expect(second).not.toBe(first);
+
+    const { result, structured } = await callApprove(client, { proposal_id: first });
+    expect(result.isError).toBe(true);
+    expect(structured?.status).toBe('refused');
+    expect(structured?.error).toBe('superseded');
+    expect(structured?.superseded_by).toBe(second);
+    expect(structured?.reason).toContain(second);
+    expect(rpc.transactions).toHaveLength(0);
+
+    const entries = context.activityLog.entries();
+    expect(entries.map((e) => e.event)).toEqual(['proposed', 'superseded', 'proposed']);
+    expect(entries[1]).toMatchObject({
+      proposal_id: first,
+      superseded_by: second,
+      tool: ACQUIRE_TOOL,
+      ts: clock.toISOString(),
+    });
+
+    // The replacement is still good.
+    const approved = await callApprove(client, { proposal_id: second });
+    expect(approved.structured?.status).toBe('executed');
+    expect(approved.structured?.bid_sol).toBe('0.12');
+  });
+
+  it('superseded: each write tool keeps its own open proposal', async () => {
+    const rpc = ours();
+    const context = makeContext(rpc);
+    const { client } = await connect(context);
+
+    const { structured: appended } = await callAppend(client, {
+      reasoning: REASON,
+      message: 'more',
+    });
+    const { structured: cleared } = await callClear(client, { reasoning: REASON });
+    expect(appended?.status).toBe('proposed');
+    expect(cleared?.status).toBe('proposed');
+
+    // Proposing append again replaces only the append proposal.
+    const { structured: appended2 } = await callAppend(client, {
+      reasoning: REASON,
+      message: 'more still',
+    });
+    const stale = await callApprove(client, { proposal_id: appended!.proposal_id! });
+    expect(stale.structured?.error).toBe('superseded');
+    expect(stale.structured?.superseded_by).toBe(appended2!.proposal_id);
+
+    const clearOk = await callApprove(client, { proposal_id: cleared!.proposal_id! });
+    expect(clearOk.structured?.status).toBe('executed');
+  });
+
+  it('expired: refused after the deadline with `expired` logged, nothing sent', async () => {
     const rpc = theirs();
     const context = makeContext(rpc);
     const { client } = await connect(context);

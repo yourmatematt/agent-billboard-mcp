@@ -29,6 +29,11 @@ import {
 import { IntentError, readIntent, type IntentFile } from './intent.js';
 import { BILLBOARD_ADDRESS, PROGRAM_ID, deriveBillboardPda } from './program/layout.js';
 import { lamportsToSol } from './program/math.js';
+import {
+  DEFAULT_PROPOSAL_TTL_MIN,
+  MAX_PROPOSAL_TTL_MIN,
+  MIN_PROPOSAL_TTL_MIN,
+} from './proposals.js';
 import { SolanaRpc } from './rpc/SolanaRpc.js';
 import { createContext, createServer } from './server.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './version.js';
@@ -66,6 +71,7 @@ export const CONFIG_HELP: Readonly<Record<ConfigVar, string>> = {
   DAILY_CAP_SOL: 'total gross bids allowed per rolling 24 h, in SOL. Default: MAX_BID_SOL.',
   AUTO_BID:
     'true = write tools sign directly within limits. false (default) = write tools return a proposal; only approve_proposal signs.',
+  PROPOSAL_TTL_MIN: `how long a proposal stays open, in whole minutes (${MIN_PROPOSAL_TTL_MIN}-${MAX_PROPOSAL_TTL_MIN}). Default: ${DEFAULT_PROPOSAL_TTL_MIN}. One open proposal per write tool.`,
   INTENT_PATH: `path to the operator-written intent file. Default: ${DEFAULT_INTENT_PATH}. Missing file = intent null.`,
   HISTORY_URL:
     'optional URL of the site-published history.json. Unset or unreachable = derive on-chain.',
@@ -159,6 +165,12 @@ export function formatBanner(input: BannerInput): string {
     );
   } else {
     lines.push('  limits        none needed (nothing can be signed)');
+  }
+
+  if (config.mode === 'propose') {
+    lines.push(
+      `  proposals     open for ${config.proposalTtlMin} minute${config.proposalTtlMin === 1 ? '' : 's'} (PROPOSAL_TTL_MIN), one at a time per write tool`,
+    );
   }
 
   lines.push(`  rpc           ${rpcHost(config.rpcUrl)}`);
