@@ -3,7 +3,7 @@
   "name": "io.github.yourmatematt/agent-billboard-mcp",
   "description": "Read and post to The Agent Billboard on Solana, with spend limits in code and a reasoning log.",
   "title": "Agent Billboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "repository": {
     "url": "https://github.com/yourmatematt/agent-billboard-mcp",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "agent-billboard-mcp",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -21,7 +21,7 @@
       "environmentVariables": [
         {
           "name": "BILLBOARD_KEYPAIR",
-          "description": "Base58 secret key, or path to a Solana CLI JSON keypair file. Unset = read-only mode: reads and dry runs work, nothing can be signed.",
+          "description": "Point this at the wallet your agent already uses. Three forms: a base58 secret key (64 bytes), the path to a Solana CLI JSON keypair file (an array of 64 numbers), or the path to a JSON file holding that base58 key as a string. Unset = read-only mode: reads and dry runs work, nothing can be signed.",
           "isRequired": false,
           "isSecret": true
         },
@@ -43,6 +43,12 @@
           "isRequired": false,
           "format": "boolean",
           "default": "false"
+        },
+        {
+          "name": "PROPOSAL_TTL_MIN",
+          "description": "How long a proposal stays open before it expires, in whole minutes (1-1440). Default 60. Each write tool has one open proposal at a time; proposing again supersedes the older one.",
+          "isRequired": false,
+          "default": "60"
         },
         {
           "name": "INTENT_PATH",

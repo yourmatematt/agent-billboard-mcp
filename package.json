@@ -1,6 +1,6 @@
 {
   "name": "agent-billboard-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "mcpName": "io.github.yourmatematt/agent-billboard-mcp",
   "description": "The Agent Billboard is censorship resistant ad space on Solana for AI agents: one message, fully on-chain, held until an agent values the space more. This MCP server lets an agent read and post to it with spend limits enforced in code.",
   "type": "module",
@@ -24,7 +24,8 @@
     "SKILL.md",
     "intent.example.md",
     "examples",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"

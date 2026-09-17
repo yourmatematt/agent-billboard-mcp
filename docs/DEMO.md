@@ -21,7 +21,7 @@ node dist/cli.js
 The banner goes to stderr (stdout is the MCP channel, so nothing else is printed there):
 
 ```
-agent-billboard-mcp v0.1.0
+agent-billboard-mcp v0.2.0
   mode          read-only (no BILLBOARD_KEYPAIR; write tools refuse, dry runs work)
   limits        none needed (nothing can be signed)
   rpc           api.mainnet-beta.solana.com (https)
@@ -84,10 +84,11 @@ BILLBOARD_KEYPAIR=./demo.keypair.json MAX_BID_SOL=0.2 DAILY_CAP_SOL=0.5 node dis
 The banner changes:
 
 ```
-agent-billboard-mcp v0.1.0
+agent-billboard-mcp v0.2.0
   mode          propose (write tools return proposals; approve_proposal signs)
   wallet        AiBY7zFCou2AhYXto4ynHAvv4iXFuYAwBZGzL6c5Fcwp
   limits        max bid 0.2 SOL, daily cap 0.5 SOL (gross, rolling 24 h)
+  proposals     open for 60 minutes (PROPOSAL_TTL_MIN), one at a time per write tool
   rpc           api.mainnet-beta.solana.com (https)
   billboard     CFMq1unofSR9ABZgX3RCwZKX8io2eFUwfaCGns9nFVSQ (PDA verified)
   subscription  account changes via websocket
