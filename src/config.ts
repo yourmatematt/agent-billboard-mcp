@@ -196,10 +196,32 @@ const envSchema = z.object({
 // ---------------------------------------------------------------------------
 
 const SECRET_KEY_BYTES = 64;
+const SEED_BYTES = 32;
 
 /**
- * Loads a keypair from either a base58-encoded 64-byte secret key or the
- * path to a Solana CLI JSON keypair file (a JSON array of 64 numbers).
+ * The three forms an agent's wallet actually arrives in. Every keypair error
+ * ends with this list, so an operator who got the format wrong is told what
+ * is accepted without having to open the README. It describes shapes only —
+ * nothing here can echo a value.
+ */
+const ACCEPTED_FORMATS =
+  'Accepted: (1) a base58-encoded 64-byte secret key, usually 88 characters, as a wallet exports it; ' +
+  '(2) the path to a Solana CLI keypair file (a JSON array of 64 numbers); ' +
+  '(3) the path to a JSON file holding that base58 secret key as a string.';
+
+/**
+ * A `ConfigError` that names the format received and the three accepted ones.
+ * `received` is a phrase completing "BILLBOARD_KEYPAIR ..." and must describe
+ * the value's shape, never its contents.
+ */
+function keypairError(received: string): ConfigError {
+  return new ConfigError(`BILLBOARD_KEYPAIR ${received} ${ACCEPTED_FORMATS}`);
+}
+
+/**
+ * Loads a keypair from a base58-encoded 64-byte secret key, or from the path
+ * to a keypair file holding either a Solana CLI byte array or that same
+ * base58 secret key as a JSON string.
  *
  * A value is treated as a path when a file exists at it (relative to `cwd`)
  * or when it ends in `.json`. Otherwise it is decoded as base58.
@@ -209,7 +231,7 @@ const SECRET_KEY_BYTES = 64;
 export function loadKeypair(value: string, cwd: string = process.cwd()): Keypair {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
-    throw new ConfigError('BILLBOARD_KEYPAIR is set but empty');
+    throw keypairError('is set but empty.');
   }
 
   const asPath = resolve(cwd, trimmed);
@@ -231,52 +253,85 @@ function loadKeypairFile(path: string): Keypair {
     // the "path" is the operator's raw value, which may be a secret key that
     // happened to end in `.json`; say where it was looked for instead.
     if (code === 'ENOENT') {
-      throw new ConfigError(
-        `BILLBOARD_KEYPAIR looks like a keypair file path but no file exists there ` +
-          `(resolved relative to ${dirname(path)}). Check the path, or supply a base58 secret key.`,
+      throw keypairError(
+        `looks like a keypair file path but no file exists there ` +
+          `(resolved relative to ${dirname(path)}).`,
       );
     }
-    throw new ConfigError(
-      `BILLBOARD_KEYPAIR points to a keypair file that could not be read (${code}): ${path}`,
-    );
+    throw keypairError(`points to a keypair file that could not be read (${code}): ${path}.`);
   }
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new ConfigError(
-      `BILLBOARD_KEYPAIR keypair file is not valid JSON (expected a Solana CLI keypair: a JSON array of 64 numbers): ${path}`,
+    // Some runtimes write the base58 secret key to a file without quoting it,
+    // which is not JSON. Treat the whole file as the key before giving up.
+    return decodeBase58Secret(
+      raw.trim(),
+      `keypair file is not valid JSON and its contents are not a base58 secret key either: ${path}.`,
+      `keypair file ${path}`,
     );
   }
-  const bytes = z
-    .array(z.number().int().min(0).max(255))
-    .length(SECRET_KEY_BYTES)
-    .safeParse(parsed);
-  if (!bytes.success) {
-    throw new ConfigError(
-      `BILLBOARD_KEYPAIR keypair file must be a JSON array of exactly ${SECRET_KEY_BYTES} byte values (Solana CLI format): ${path}`,
+
+  // Form (3): a JSON string holding the base58 secret key.
+  if (typeof parsed === 'string') {
+    return decodeBase58Secret(
+      parsed.trim(),
+      `keypair file holds a JSON string that is not valid base58: ${path}.`,
+      `keypair file ${path}`,
+    );
+  }
+
+  // Form (2): the Solana CLI byte array.
+  const bytes = z.array(z.number().int().min(0).max(255)).safeParse(parsed);
+  if (!bytes.success || bytes.data.length !== SECRET_KEY_BYTES) {
+    const got = Array.isArray(parsed)
+      ? `an array of ${parsed.length} entries`
+      : `JSON of type ${parsed === null ? 'null' : typeof parsed}`;
+    throw keypairError(
+      `keypair file must be a JSON array of exactly ${SECRET_KEY_BYTES} byte values ` +
+        `(Solana CLI format) or a JSON string holding a base58 secret key; ${path} holds ${got}.`,
     );
   }
   return fromSecretKey(Uint8Array.from(bytes.data), `keypair file ${path}`);
 }
 
 function loadKeypairBase58(value: string): Keypair {
+  return decodeBase58Secret(
+    value,
+    'is neither an existing keypair file path nor a valid base58 string.',
+    'base58 value',
+  );
+}
+
+/**
+ * Decodes a base58 secret key and checks its length. `undecodable` is the
+ * phrase used when base58 decoding fails; `source` names where the bytes came
+ * from. Neither may contain the value.
+ */
+function decodeBase58Secret(value: string, undecodable: string, source: string): Keypair {
   let decoded: Uint8Array;
   try {
     decoded = bs58.decode(value);
   } catch {
-    throw new ConfigError(
-      'BILLBOARD_KEYPAIR is neither an existing keypair file path nor a valid base58 string. ' +
-        'Supply the path to a Solana CLI keypair JSON file or a base58-encoded 64-byte secret key.',
+    throw keypairError(undecodable);
+  }
+  if (decoded.length === SEED_BYTES) {
+    // 32 bytes is either a seed or a public key. We cannot tell which, and it
+    // does not matter: neither can sign.
+    throw keypairError(
+      `${source} decodes to ${SEED_BYTES} bytes, which is a private key seed or a public key, ` +
+        `not a ${SECRET_KEY_BYTES}-byte secret key. The server signs transactions, so it needs the ` +
+        'full keypair: export it from your wallet, or run `solana-keygen` against the seed.',
     );
   }
   if (decoded.length !== SECRET_KEY_BYTES) {
-    throw new ConfigError(
-      `BILLBOARD_KEYPAIR base58 value decodes to ${decoded.length} bytes; a Solana secret key is ${SECRET_KEY_BYTES} bytes. ` +
-        'If you have a 32-byte seed, export the full keypair with the Solana CLI instead.',
+    throw keypairError(
+      `${source} decodes to ${decoded.length} bytes; a Solana secret key is ${SECRET_KEY_BYTES} bytes.`,
     );
   }
-  return fromSecretKey(decoded, 'base58 value');
+  return fromSecretKey(decoded, source);
 }
 
 function fromSecretKey(bytes: Uint8Array, source: string): Keypair {

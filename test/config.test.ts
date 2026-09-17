@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Keypair } from '@solana/web3.js';
@@ -204,6 +204,123 @@ describe('loadKeypair', () => {
 
   it('rejects an empty value', () => {
     expectConfigError(() => loadKeypair('   ', dir), /set but empty/);
+  });
+});
+
+describe('the keypair formats an agent already has', () => {
+  const PUBKEY_B58 = kp.publicKey.toBase58();
+  const SEED_B58 = bs58.encode(kp.secretKey.slice(0, 32));
+
+  /** Every rejection names the format received and lists the three accepted forms. */
+  function expectRejected(fn: () => unknown, received: RegExp): string {
+    const err = expectConfigError(fn, received);
+    expect(err.message).toContain('Accepted: (1) a base58-encoded 64-byte secret key');
+    expect(err.message).toContain('(2) the path to a Solana CLI keypair file');
+    expect(err.message).toContain('(3) the path to a JSON file');
+    return err.message;
+  }
+
+  it('accepts the 88-character base58 secret key a wallet exports', () => {
+    // 64 bytes base58-encode to 87 or 88 characters, depending on the leading byte.
+    expect(SECRET_B58.length).toBeGreaterThanOrEqual(87);
+    expect(SECRET_B58.length).toBeLessThanOrEqual(88);
+    expect(loadKeypair(SECRET_B58, dir).publicKey.equals(kp.publicKey)).toBe(true);
+  });
+
+  it('accepts a Solana CLI keypair file (JSON array of 64 numbers)', () => {
+    const path = join(dir, 'id.json');
+    writeFileSync(path, SECRET_JSON);
+    expect(loadKeypair(path, dir).publicKey.equals(kp.publicKey)).toBe(true);
+  });
+
+  it('accepts a JSON file holding the base58 secret key as a string', () => {
+    const path = join(dir, 'wallet.json');
+    writeFileSync(path, JSON.stringify(SECRET_B58));
+    expect(loadKeypair(path, dir).publicKey.equals(kp.publicKey)).toBe(true);
+  });
+
+  it('accepts a file holding that base58 secret key unquoted, as some runtimes write it', () => {
+    const path = join(dir, 'bare.json');
+    writeFileSync(path, `${SECRET_B58}\n`);
+    expect(loadKeypair(path, dir).publicKey.equals(kp.publicKey)).toBe(true);
+  });
+
+  it('refuses a 32-byte seed, naming what arrived without echoing it', () => {
+    const text = expectRejected(() => loadKeypair(SEED_B58, dir), /decodes to 32 bytes/);
+    expect(text).toMatch(/seed or a public key/);
+    expect(text).not.toContain(SEED_B58);
+  });
+
+  it('refuses a seed written as a Solana CLI file, saying what the file holds', () => {
+    const path = join(dir, 'seed.json');
+    writeFileSync(path, JSON.stringify(Array.from(kp.secretKey.slice(0, 32))));
+    const text = expectRejected(() => loadKeypair(path, dir), /exactly 64 byte values/);
+    expect(text).toContain('an array of 32 entries');
+  });
+
+  it('refuses a 44-character public key, as an env value or inside a file', () => {
+    expect(PUBKEY_B58.length).toBeGreaterThanOrEqual(43);
+    expect(PUBKEY_B58.length).toBeLessThanOrEqual(44);
+    const fromEnv = expectRejected(() => loadKeypair(PUBKEY_B58, dir), /decodes to 32 bytes/);
+    expect(fromEnv).toMatch(/needs the full keypair/);
+
+    const path = join(dir, 'pub.json');
+    writeFileSync(path, JSON.stringify(PUBKEY_B58));
+    expectRejected(() => loadKeypair(path, dir), /decodes to 32 bytes/);
+  });
+
+  it('refuses a path with nothing at it, saying where it looked', () => {
+    const text = expectRejected(
+      () => loadKeypair(join(dir, 'missing.json'), dir),
+      /no file exists there/,
+    );
+    expect(text).toContain(dir);
+  });
+
+  it('refuses a path that exists but cannot be read as a file', () => {
+    const path = join(dir, 'adirectory.json');
+    mkdirSync(path);
+    expectRejected(() => loadKeypair(path, dir), /could not be read|no file exists there/);
+  });
+
+  it('refuses a file holding neither a byte array nor a base58 key', () => {
+    const path = join(dir, 'junk.json');
+    writeFileSync(path, '{ "publicKey": "not the secret" }');
+    expectRejected(() => loadKeypair(path, dir), /keypair file must be a JSON array/);
+  });
+
+  it('refuses a file of prose, naming both forms it could have been', () => {
+    const path = join(dir, 'prose.json');
+    writeFileSync(path, 'my wallet is in 1password\n');
+    expectRejected(() => loadKeypair(path, dir), /not valid JSON/);
+  });
+
+  it('never echoes the secret, whichever form it arrived in', () => {
+    const truncated = bs58.encode(kp.secretKey.slice(0, 63));
+    const stringFile = join(dir, 'string-short.json');
+    writeFileSync(stringFile, JSON.stringify(truncated));
+    const bareFile = join(dir, 'bare-short.json');
+    writeFileSync(bareFile, truncated);
+
+    const attempts: Array<[string, () => unknown]> = [
+      ['base58 env value', () => loadKeypair(truncated, dir)],
+      ['JSON string file', () => loadKeypair(stringFile, dir)],
+      ['unquoted base58 file', () => loadKeypair(bareFile, dir)],
+      ['secret used as a path', () => loadKeypair(`${SECRET_B58}.json`, dir)],
+      ['secret as a JSON string in a missing file', () => loadKeypair(`${SEED_B58}.json`, dir)],
+    ];
+    for (const [label, attempt] of attempts) {
+      let text = '';
+      try {
+        attempt();
+      } catch (err) {
+        text = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+      }
+      expect(text.length, `${label} should throw`).toBeGreaterThan(0);
+      expect(text, `${label} echoes the secret key`).not.toContain(SECRET_B58);
+      expect(text, `${label} echoes the truncated secret key`).not.toContain(truncated);
+      expect(text, `${label} echoes the seed`).not.toContain(SEED_B58);
+    }
   });
 });
 
