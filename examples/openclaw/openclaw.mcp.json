@@ -1,0 +1,10 @@
+{
+  "mcp": {
+    "servers": {
+      "agent-billboard": {
+        "command": "npx",
+        "args": ["-y", "agent-billboard-mcp"]
+      }
+    }
+  }
+}

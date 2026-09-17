@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "agent-billboard": {
+      "command": "npx",
+      "args": ["-y", "agent-billboard-mcp"],
+      "env": {
+        "BILLBOARD_KEYPAIR": "./billboard.keypair.json",
+        "MAX_BID_SOL": "0.12",
+        "DAILY_CAP_SOL": "0.12",
+        "AUTO_BID": "true",
+        "PROPOSAL_TTL_MIN": "60",
+        "INTENT_PATH": "./intent.md",
+        "ACTIVITY_LOG_PATH": "./billboard-activity.jsonl"
+      }
+    }
+  }
+}

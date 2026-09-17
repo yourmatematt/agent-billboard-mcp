@@ -23,6 +23,7 @@
     "README.md",
     "SKILL.md",
     "intent.example.md",
+    "examples",
     "LICENSE"
   ],
   "engines": {
