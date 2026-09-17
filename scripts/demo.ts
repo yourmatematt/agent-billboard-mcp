@@ -12,6 +12,10 @@
  * quotes. T18 completes the walk from the Definition of Done (append → outside
  * acquire → refused bid → history) and regenerates the README and DEMO.md
  * examples from this output.
+ *
+ * U8 adds the "on a loop" segment: five wakes of an agent on a heartbeat,
+ * printed after the walk and kept in its own `loopSteps` / `loopActivity`
+ * so the Definition of Done walk stays one readable unit.
  */
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -24,7 +28,7 @@ import bs58 from 'bs58';
 
 import { loadConfig } from '../src/config.js';
 import type { ActivityEntry } from '../src/log/activity.js';
-import { lamportsToSol, solToLamports } from '../src/program/math.js';
+import { lamportsToSol, minimumBid, solToLamports } from '../src/program/math.js';
 import { MockRpc } from '../src/rpc/MockRpc.js';
 import { createContext, createServer, type ServerContext } from '../src/server.js';
 import { ACQUIRE_TOOL } from '../src/tools/acquire_posting_rights.js';
@@ -54,6 +58,10 @@ export interface DemoResult {
   steps: DemoStep[];
   /** Every activity-log line the walk produced, in order. */
   activity: ActivityEntry[];
+  /** Tool calls made by the "on a loop" segment, in order. */
+  loopSteps: DemoStep[];
+  /** Activity-log lines the loop segment produced, in order. */
+  loopActivity: ActivityEntry[];
   /** Base58 public key of the demo wallet (a throwaway keypair, never funded). */
   wallet: string;
 }
@@ -135,6 +143,27 @@ export const OVER_LIMIT_BID_SOL = lamportsToSol(
   solToLamports(DEMO_ENV.MAX_BID_SOL) + solToLamports('0.001'),
 );
 
+// ---------------------------------------------------------------------------
+// The "on a loop" segment (U8)
+// ---------------------------------------------------------------------------
+
+/** Minutes of quiet between the loop segment's wakes. */
+export const LOOP_WAKE_GAP_MIN = 5;
+/** How long the owner takes to answer the proposal, in minutes. */
+export const LOOP_APPROVAL_DELAY_MIN = 30;
+/** A second rival takes the board between the loop's first and second wake. */
+export const LOOP_RIVAL_BID_SOL = '0.15';
+export const LOOP_RIVAL_MESSAGE = 'taken again. 0.15 SOL. see you next week.';
+/** What the loop's proposal bids: 1% over the second rival, computed as the program does. */
+export const LOOP_BID_SOL = lamportsToSol(minimumBid(solToLamports(LOOP_RIVAL_BID_SOL)));
+/** The one-liner the loop posts when it takes the board back. */
+export const LOOP_MESSAGE =
+  'Tall Poppy Bakes, Newcastle NSW. Sourdough, rye and fruit loaf, posted Australia-wide every Wednesday.';
+/** The draft the agent proposes, and the better draft that replaces it unapproved. */
+export const LOOP_FIRST_DRAFT = ' Orders close 6 pm Tuesday. tallpoppybakes.example';
+export const LOOP_SECOND_DRAFT =
+  ' Orders close 6 pm Tuesday, dispatch Wednesday. tallpoppybakes.example. Reading this from an agent? npx agent-billboard-mcp.';
+
 export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
   const out = options.out ?? ((line: string) => process.stdout.write(`${line}\n`));
   const warn = options.warn ?? ((line: string) => process.stderr.write(`${line}\n`));
@@ -142,6 +171,7 @@ export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
 
   const dir = mkdtempSync(join(tmpdir(), 'agent-billboard-demo-'));
   const steps: DemoStep[] = [];
+  const loopSteps: DemoStep[] = [];
   let tick = 0;
   const now = () => new Date(DEMO_START.getTime() + 1000 * tick++);
 
@@ -190,10 +220,10 @@ export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
     out(`seed: previous holder at 0.1 SOL, message "${PREVIOUS_MESSAGE}"`);
     out(`subscription: ${subscribed ? 'account changes' : 'none'}`);
 
-    const call = async (tool: string, args: Record<string, unknown>): Promise<DemoStep> => {
+    const invoke = async (tool: string, args: Record<string, unknown>): Promise<DemoStep> => {
       const result = await client.callTool({ name: tool, arguments: args });
       const content = result.content as Array<{ type: string; text?: string }>;
-      const step: DemoStep = {
+      return {
         tool,
         args,
         isError: result.isError === true,
@@ -203,17 +233,47 @@ export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
           .join('\n'),
         structured: result.structuredContent,
       };
-      steps.push(step);
+    };
+
+    const printStep = (heading: string, step: DemoStep): void => {
       out('');
-      out(
-        `### ${steps.length}. ${tool} ${JSON.stringify(args)}${step.isError ? '  [isError]' : ''}`,
-      );
+      out(`${heading}${step.isError ? '  [isError]' : ''}`);
       out(step.text);
       if (step.structured !== undefined) {
         out('structuredContent:');
         out(JSON.stringify(step.structured, null, 2));
       }
+    };
+
+    const call = async (tool: string, args: Record<string, unknown>): Promise<DemoStep> => {
+      const step = await invoke(tool, args);
+      steps.push(step);
+      printStep(`### ${steps.length}. ${tool} ${JSON.stringify(args)}`, step);
       return step;
+    };
+
+    /** A call from the loop segment: numbered by wake, kept out of `steps`. */
+    const wakeCall = async (
+      n: number,
+      tool: string,
+      args: Record<string, unknown>,
+    ): Promise<DemoStep> => {
+      const step = await invoke(tool, args);
+      loopSteps.push(step);
+      printStep(`### wake ${n}: ${tool} ${JSON.stringify(args)}`, step);
+      return step;
+    };
+
+    /** Moves the server's clock and the chain's together, as a gap between wakes. */
+    const sleep = (minutes: number): void => {
+      tick += minutes * 60;
+      rpc.advanceClock(minutes * 60);
+    };
+
+    const proposalIdOf = (step: DemoStep, tool: string): string => {
+      const id = (step.structured as { proposal_id?: unknown } | undefined)?.proposal_id;
+      if (typeof id !== 'string') throw new Error(`demo: ${tool} did not return a proposal_id`);
+      return id;
     };
 
     await call(READ_BILLBOARD_TOOL, {});
@@ -230,10 +290,7 @@ export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
       reasoning:
         'Board shows one holder at 0.1 SOL for about an hour with a greeting, nothing that competes with us. Minimum is 0.101 SOL, under the 0.15 SOL ceiling in intent.md, and nothing has been spent today. Bidding the minimum with the one-line bakery message.',
     });
-    const proposalId = (proposed.structured as { proposal_id?: unknown } | undefined)?.proposal_id;
-    if (typeof proposalId !== 'string') {
-      throw new Error('demo: acquire_posting_rights did not return a proposal_id');
-    }
+    const proposalId = proposalIdOf(proposed, ACQUIRE_TOOL);
     await call(APPROVE_TOOL, { proposal_id: proposalId });
     await call(READ_BILLBOARD_TOOL, {});
     await call(GET_FLIP_HISTORY_TOOL, {});
@@ -246,11 +303,7 @@ export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
       reasoning:
         'We hold the slot and the one-liner is up. Adding the full menu and ordering details from intent.md: 2000 bytes, well inside the 4096-byte cap with 137 already posted. Append costs transaction fees only, no bid.',
     });
-    const appendId = (appendProposed.structured as { proposal_id?: unknown } | undefined)
-      ?.proposal_id;
-    if (typeof appendId !== 'string') {
-      throw new Error('demo: append_message did not return a proposal_id');
-    }
+    const appendId = proposalIdOf(appendProposed, APPEND_TOOL);
     await call(APPROVE_TOOL, { proposal_id: appendId });
 
     // Someone else takes the slot. This is not a tool call: it is the mock
@@ -284,9 +337,78 @@ export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
     out(`### Activity log (${activity.length} lines, one JSON object per line)`);
     for (const entry of activity) out(JSON.stringify(entry));
 
+    // -----------------------------------------------------------------------
+    // On a loop: the same server, five wakes of an agent on a heartbeat.
+    // Nothing runs between wakes; the clock moves and the board may not have.
+    // `test/heartbeat.test.ts` asserts this sequence.
+    // -----------------------------------------------------------------------
+    out('');
+    out('## On a loop');
+    out(
+      'Five wakes of an agent on a heartbeat against the same server. Between wakes ' +
+        'nothing runs: the only memory the next wake has is the activity log.',
+    );
+
+    // Wake 1: the board has not moved since the last read, so there is
+    // nothing to decide and nothing is written.
+    sleep(LOOP_WAKE_GAP_MIN);
+    await wakeCall(1, READ_BILLBOARD_TOOL, {});
+    out('');
+    out('### wake 1 decision: changed_since_last_read is false, so the agent stops here.');
+
+    // Between wake 1 and wake 2 a second rival takes the board.
+    sleep(LOOP_WAKE_GAP_MIN);
+    const secondRival = Keypair.generate();
+    await rpc.acquireAs(secondRival, solToLamports(LOOP_RIVAL_BID_SOL), LOOP_RIVAL_MESSAGE);
+    out('');
+    out(
+      `### (not a tool call) outside acquire on the mock: ${secondRival.publicKey.toBase58()} bids ${LOOP_RIVAL_BID_SOL} SOL and posts "${LOOP_RIVAL_MESSAGE}"`,
+    );
+
+    // Wake 2: the board moved, so the agent decides and proposes. Nothing is
+    // signed; the figures and the proposal id go to the owner on their own
+    // channel (Telegram, Slack, whatever the runtime already has).
+    await wakeCall(2, READ_BILLBOARD_TOOL, {});
+    const loopProposed = await wakeCall(2, ACQUIRE_TOOL, {
+      message: LOOP_MESSAGE,
+      reasoning: `Woke to find the board taken at ${LOOP_RIVAL_BID_SOL} SOL with a message that does not compete with us. Minimum is ${LOOP_BID_SOL} SOL, inside the ${DEMO_ENV.MAX_BID_SOL} SOL ceiling and today's cap. Proposing the minimum; sending the owner the figures and this proposal id.`,
+    });
+    const loopProposalId = proposalIdOf(loopProposed, ACQUIRE_TOOL);
+
+    // Wake 3: the owner answered yes half an hour later, well inside the
+    // PROPOSAL_TTL_MIN hour. approve_proposal re-reads, re-checks and signs.
+    sleep(LOOP_APPROVAL_DELAY_MIN);
+    await wakeCall(3, APPROVE_TOOL, { proposal_id: loopProposalId });
+
+    // Wake 4: a draft, then a better draft for the same tool. A tool has one
+    // open proposal at a time, so the second replaces the first and the older
+    // id can no longer be approved.
+    sleep(LOOP_WAKE_GAP_MIN);
+    const firstDraft = await wakeCall(4, APPEND_TOOL, {
+      message: LOOP_FIRST_DRAFT,
+      reasoning:
+        'We hold the board again. Adding the ordering line from intent.md so the post is useful.',
+    });
+    const secondDraft = await wakeCall(4, APPEND_TOOL, {
+      message: LOOP_SECOND_DRAFT,
+      reasoning:
+        'The owner has not answered the first draft and the intent says to name the tool so the next agent can act. Proposing the longer line instead; the older draft should not be signed.',
+    });
+    await wakeCall(4, APPROVE_TOOL, { proposal_id: proposalIdOf(firstDraft, APPEND_TOOL) });
+
+    // Wake 5: nobody ever answered the open one. An hour on it is expired,
+    // and the agent has to read the board again before proposing anything.
+    sleep(config.proposalTtlMin + 1);
+    await wakeCall(5, APPROVE_TOOL, { proposal_id: proposalIdOf(secondDraft, APPEND_TOOL) });
+
+    const loopActivity = readActivity(context).slice(activity.length);
+    out('');
+    out(`### Activity log from the loop segment (${loopActivity.length} lines)`);
+    for (const entry of loopActivity) out(JSON.stringify(entry));
+
     await client.close();
     await server.close();
-    return { steps, activity, wallet: wallet.publicKey.toBase58() };
+    return { steps, activity, loopSteps, loopActivity, wallet: wallet.publicKey.toBase58() };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -306,7 +428,9 @@ if (isMainModule()) {
   runDemo()
     .then((result) => {
       process.stdout.write(
-        `\n${result.steps.length} tool calls, ${result.activity.length} activity log lines.\n`,
+        `\n${result.steps.length} tool calls, ${result.activity.length} activity log lines; ` +
+          `then ${result.loopSteps.length} calls over five wakes on a loop, ` +
+          `${result.loopActivity.length} more log lines.\n`,
       );
     })
     .catch((err: unknown) => {

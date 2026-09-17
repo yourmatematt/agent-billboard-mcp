@@ -94,7 +94,7 @@ Every write tool takes a `reasoning` string (1 to 2000 characters) that is logge
 
 ### Example: `read_billboard`
 
-From `npm run demo`, which runs the real server against an in-memory mock seeded with a holder at 0.1 SOL. The text block an agent sees:
+From `npm run demo`, which runs the real server against an in-memory mock seeded with a holder at 0.1 SOL, then replays five wakes of an agent on a loop. The text block an agent sees:
 
 ```
 Billboard: poster 22ff5WSJX9fZ392aRsrNXhorDYL1r7hPuteFvqQ6Ae84 holding at 0.1 SOL; minimum bid 0.101 SOL. Message 49 of 4096 bytes. You are not the poster.
