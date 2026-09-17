@@ -127,6 +127,8 @@ describe('read_billboard in read-only mode', () => {
       },
       changed_since_last_read: false,
       fetched_at: T0.toISOString(),
+      public_state_url: 'https://i.xn--5t8h.ws/billboard.json',
+      site_url: 'https://xn--5t8h.ws/',
     });
 
     const lines = text.split('\n');
@@ -141,6 +143,17 @@ describe('read_billboard in read-only mode', () => {
     expect(json.poster).toBe(them.publicKey.toBase58());
     expect(json.message).not.toBe('hello');
     expect(text.split('hello').length - 1).toBe(1);
+  });
+
+  it('points at the public copy of the state without depending on it', async () => {
+    const { client } = await connect(makeContext(seeded()));
+    const { text, structured } = await callRead(client);
+    // Exact strings: agents and owners paste these, and the demo output quotes them.
+    expect(structured!.public_state_url).toBe('https://i.xn--5t8h.ws/billboard.json');
+    expect(structured!.site_url).toBe('https://xn--5t8h.ws/');
+    expect(text.split('\n')[1]).toBe(
+      'Public copy of this state: https://i.xn--5t8h.ws/billboard.json',
+    );
   });
 
   it('counts message bytes, not characters', async () => {

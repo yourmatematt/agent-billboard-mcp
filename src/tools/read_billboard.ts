@@ -16,7 +16,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 import { loadIntent } from '../intent.js';
-import { MESSAGE_SIZE } from '../program/layout.js';
+import { MESSAGE_SIZE, PUBLIC_STATE_URL, SITE_URL } from '../program/layout.js';
 import { lamportsToSol, minimumBid } from '../program/math.js';
 import type { ServerContext } from '../server.js';
 
@@ -57,6 +57,13 @@ export const readBillboardOutputShape = {
   }),
   changed_since_last_read: z.boolean(),
   fetched_at: z.string(),
+  public_state_url: z
+    .string()
+    .describe(
+      'Where a JSON copy of this state is published. Informational: the server never reads it, ' +
+        'and RPC stays the only source of truth.',
+    ),
+  site_url: z.string().describe('The board on the web, for anyone without an MCP client.'),
 };
 
 const readBillboardOutputSchema = z.object(readBillboardOutputShape);
@@ -94,6 +101,8 @@ export async function readBillboard(context: ServerContext): Promise<ReadBillboa
     },
     changed_since_last_read: read.changedSinceLastRead,
     fetched_at: read.fetchedAt.toISOString(),
+    public_state_url: PUBLIC_STATE_URL,
+    site_url: SITE_URL,
   };
 }
 
@@ -109,6 +118,7 @@ export function formatReadBillboardText(output: ReadBillboardOutput): string {
     `Billboard: poster ${output.poster} holding at ${output.amount_sol} SOL; ` +
       `minimum bid ${output.minimum_bid_sol} SOL. ` +
       `Message ${output.message_bytes} of ${MESSAGE_SIZE} bytes. ${relation}`,
+    `Public copy of this state: ${output.public_state_url}`,
     UNTRUSTED_BANNER,
     output.message,
     UNTRUSTED_END,

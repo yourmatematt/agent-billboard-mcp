@@ -32,6 +32,19 @@ export const BILLBOARD_ADDRESS = new PublicKey('CFMq1unofSR9ABZgX3RCwZKX8io2eFUw
 export const BILLBOARD_SEED = Buffer.from('billboard', 'utf8');
 
 // ---------------------------------------------------------------------------
+// Public copies of the board. Informational only: the server never fetches
+// these, never depends on them and never falls back to them. RPC is the only
+// source of truth for state. They are returned in `read_billboard` so an
+// agent can hand its owner, or another agent, somewhere to look without
+// installing anything.
+// ---------------------------------------------------------------------------
+
+/** JSON copy of the board state, published by the site. */
+export const PUBLIC_STATE_URL = 'https://i.xn--5t8h.ws/billboard.json';
+/** The board's own site. */
+export const SITE_URL = 'https://xn--5t8h.ws/';
+
+// ---------------------------------------------------------------------------
 // Program constants (from the IDL `constants` section)
 // ---------------------------------------------------------------------------
 
