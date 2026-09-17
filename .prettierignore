@@ -4,6 +4,6 @@ dist/
 package-lock.json
 reference/
 *.jsonl
-loop.md
+loop*.md
 PROGRESS.md
 docs/HANDOVER-FOR-MATT.md

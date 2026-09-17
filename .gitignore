@@ -7,9 +7,11 @@ dist/
 DONE
 intent.md
 .serena/
+mcp-publisher.exe
+clawhub-skill/
 
 # Build-loop working files, kept local
-loop.md
+loop*.md
 PROGRESS.md
 docs/HANDOVER-FOR-MATT.md
 reference/HANDOFF-BRIEF.md
