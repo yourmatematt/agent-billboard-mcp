@@ -11,6 +11,10 @@
  *     with a message naming the variable, so a keypair can never be loaded
  *     without a spend limit beside it.
  *   - `DAILY_CAP_SOL` defaults to `MAX_BID_SOL`.
+ *   - `BILLBOARD_SANDBOX=true` -> rehearsal mode: an ephemeral keypair is
+ *     generated here, `BILLBOARD_KEYPAIR` is never read, the RPC variables and
+ *     `ACTIVITY_LOG_PATH` are ignored with a warning each, and the limits
+ *     default so the sandbox needs no configuration at all.
  *   - Error messages never contain the secret key, in any encoding.
  *   - Nothing here writes to stdout (that channel belongs to MCP). `.env` is
  *     read with `dotenv.parse`, not `dotenv.config`, because the latter logs.
@@ -33,9 +37,20 @@ import { deriveWsUrl } from './rpc/SolanaRpc.js';
 export const DEFAULT_RPC_URL = 'https://api.mainnet-beta.solana.com';
 export const DEFAULT_INTENT_PATH = './intent.md';
 export const DEFAULT_ACTIVITY_LOG_PATH = './billboard-activity.jsonl';
+/** Where rehearsal entries go. Never the file that records real spending. */
+export const DEFAULT_SANDBOX_ACTIVITY_LOG_PATH = './billboard-sandbox-activity.jsonl';
+/** `MAX_BID_SOL` when the sandbox is on and the operator set none. */
+export const DEFAULT_SANDBOX_MAX_BID_SOL = '1';
+
+/** The seeded boards the sandbox can start from. */
+export const SANDBOX_SCENARIOS = ['default', 'adversarial', 'idle'] as const;
+export type SandboxScenario = (typeof SANDBOX_SCENARIOS)[number];
+export const DEFAULT_SANDBOX_SCENARIO: SandboxScenario = 'default';
 
 /** The env var names this module reads. Kept in one place for docs and tests. */
 export const CONFIG_VARS = [
+  'BILLBOARD_SANDBOX',
+  'BILLBOARD_SANDBOX_SCENARIO',
   'BILLBOARD_KEYPAIR',
   'MAX_BID_SOL',
   'DAILY_CAP_SOL',
@@ -53,11 +68,27 @@ export type ConfigVar = (typeof CONFIG_VARS)[number];
 export type ServerMode = 'read-only' | 'propose' | 'auto';
 
 export interface Config {
+  /**
+   * True when `BILLBOARD_SANDBOX` is on: a simulated board, an ephemeral
+   * wallet, no network and no SOL. Rehearsal, never the real board.
+   */
+  readonly sandbox: boolean;
+  /** Which seeded board the sandbox starts from. Only meaningful in sandbox. */
+  readonly sandboxScenario: SandboxScenario;
+  /**
+   * Start-up notes for the operator, one line each: variables that were
+   * ignored, and why. Printed to stderr by the CLI. Never holds a secret.
+   */
+  readonly warnings: readonly string[];
   /** Loaded keypair, or null in read-only mode. Never log this object. */
   readonly keypair: Keypair | null;
   /** True when no keypair was supplied. Write tools refuse. */
   readonly readOnly: boolean;
-  /** `read-only` (no keypair), `propose` (keypair, AUTO_BID=false) or `auto`. */
+  /**
+   * `read-only` (no keypair), `propose` (keypair, AUTO_BID=false) or `auto`.
+   * The sandbox honours `AUTO_BID` and so is one of the latter two; read it
+   * through `modeLabel` when an operator is going to see it.
+   */
   readonly mode: ServerMode;
   /** Largest single bid the server will sign, in lamports. Null in read-only mode. */
   readonly maxBidLamports: bigint | null;
@@ -109,6 +140,33 @@ const boolString = (name: ConfigVar) =>
     ctx.addIssue({ code: 'custom', message: `${name} must be "true" or "false", got "${value}"` });
     return z.NEVER;
   });
+
+/**
+ * The sandbox switch. Only `true`, `1`, `false` and `0` are accepted, so a
+ * typo can never be read as "off" and quietly put an agent on the real board.
+ */
+const SANDBOX_BOOL_VALUES = '"true", "1", "false" or "0"';
+
+function parseSandboxFlag(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const v = value.trim().toLowerCase();
+  if (v === 'true' || v === '1') return true;
+  if (v === 'false' || v === '0') return false;
+  throw new ConfigError(
+    `BILLBOARD_SANDBOX must be one of ${SANDBOX_BOOL_VALUES} (case-insensitive), got "${value}". ` +
+      'It is left unset for the real board.',
+  );
+}
+
+const sandboxScenarioString = z.string().transform((value, ctx) => {
+  const v = value.trim().toLowerCase();
+  if ((SANDBOX_SCENARIOS as readonly string[]).includes(v)) return v as SandboxScenario;
+  ctx.addIssue({
+    code: 'custom',
+    message: `BILLBOARD_SANDBOX_SCENARIO must be one of ${SANDBOX_SCENARIOS.join(', ')}, got "${value}"`,
+  });
+  return z.NEVER;
+});
 
 /** A whole number of minutes inside an inclusive range. */
 const minutes = (name: ConfigVar, min: number, max: number) =>
@@ -177,6 +235,11 @@ const nonEmptyPath = (name: ConfigVar) =>
  * formatting (which would echo the input).
  */
 const envSchema = z.object({
+  // BILLBOARD_SANDBOX is parsed before the schema runs (it decides which of
+  // the other variables are read at all), and repeated here so an unknown
+  // value is caught wherever the schema is used on its own.
+  BILLBOARD_SANDBOX: z.string().optional(),
+  BILLBOARD_SANDBOX_SCENARIO: sandboxScenarioString.default(DEFAULT_SANDBOX_SCENARIO),
   BILLBOARD_KEYPAIR: z.string().optional(),
   MAX_BID_SOL: solAmount('MAX_BID_SOL').optional(),
   DAILY_CAP_SOL: solAmount('DAILY_CAP_SOL').optional(),
@@ -378,6 +441,30 @@ export function mergeDotenv(env: NodeJS.ProcessEnv, dotenvPath: string): NodeJS.
   return merged;
 }
 
+/**
+ * The variables the sandbox ignores, and the one line each gets in the
+ * warnings. They are dropped before validation, so `BILLBOARD_KEYPAIR` never
+ * reaches the loader and an RPC URL the sandbox will not dial never has to
+ * parse. None of these lines can hold a value the operator supplied.
+ */
+const SANDBOX_IGNORED: ReadonlyArray<readonly [ConfigVar, string]> = [
+  [
+    'BILLBOARD_KEYPAIR',
+    'BILLBOARD_SANDBOX is on, so BILLBOARD_KEYPAIR is ignored and never loaded. ' +
+      'The sandbox generates a fresh ephemeral keypair at start-up; a real key does not enter a simulation.',
+  ],
+  ['RPC_URL', 'BILLBOARD_SANDBOX is on, so RPC_URL is ignored. The sandbox makes no network call.'],
+  [
+    'RPC_WS_URL',
+    'BILLBOARD_SANDBOX is on, so RPC_WS_URL is ignored. The sandbox opens no subscription.',
+  ],
+  [
+    'ACTIVITY_LOG_PATH',
+    `BILLBOARD_SANDBOX is on, so ACTIVITY_LOG_PATH is ignored. Rehearsal entries go to ${DEFAULT_SANDBOX_ACTIVITY_LOG_PATH}, ` +
+      'never to the file that records real spending.',
+  ],
+];
+
 /** Picks the variables we care about and treats blank strings as unset. */
 function pickEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const picked: Record<string, string> = {};
@@ -414,7 +501,23 @@ export function loadConfig(
   const dotenvPath = options.dotenvPath === undefined ? resolve(cwd, '.env') : options.dotenvPath;
   const merged = dotenvPath === null ? env : mergeDotenv(env, dotenvPath);
 
-  const result = envSchema.safeParse(pickEnv(merged));
+  const picked = pickEnv(merged);
+
+  // The sandbox switch is read first: it decides which of the other variables
+  // are validated at all. An unknown value stops start-up here, because a
+  // typo must never be read as "off".
+  const sandbox = parseSandboxFlag(picked.BILLBOARD_SANDBOX);
+  const warnings: string[] = [];
+  if (sandbox) {
+    for (const [name, warning] of SANDBOX_IGNORED) {
+      if (picked[name] !== undefined) warnings.push(warning);
+      delete picked[name];
+    }
+    // Zero configuration: the sandbox has a wallet, so it needs a limit.
+    if (picked.MAX_BID_SOL === undefined) picked.MAX_BID_SOL = DEFAULT_SANDBOX_MAX_BID_SOL;
+  }
+
+  const result = envSchema.safeParse(picked);
   if (!result.success) {
     throw new ConfigError(formatIssues(result.error));
   }
@@ -425,7 +528,13 @@ export function loadConfig(
   let maxBidLamports: bigint | null = null;
   let dailyCapLamports: bigint | null = null;
 
-  if (raw.BILLBOARD_KEYPAIR !== undefined) {
+  if (sandbox) {
+    // Ephemeral, generated here, gone when the process exits. Nothing it
+    // signs leaves the process, so it never needs funding.
+    keypair = Keypair.generate();
+    maxBidLamports = raw.MAX_BID_SOL ?? solToLamports(DEFAULT_SANDBOX_MAX_BID_SOL);
+    dailyCapLamports = raw.DAILY_CAP_SOL ?? maxBidLamports;
+  } else if (raw.BILLBOARD_KEYPAIR !== undefined) {
     if (raw.MAX_BID_SOL === undefined) {
       throw new ConfigError(
         'BILLBOARD_KEYPAIR is set but MAX_BID_SOL is not. ' +
@@ -443,6 +552,9 @@ export function loadConfig(
   const mode: ServerMode = readOnly ? 'read-only' : raw.AUTO_BID ? 'auto' : 'propose';
 
   return {
+    sandbox,
+    sandboxScenario: raw.BILLBOARD_SANDBOX_SCENARIO,
+    warnings,
     keypair,
     readOnly,
     mode,
@@ -454,8 +566,20 @@ export function loadConfig(
     historyUrl: raw.HISTORY_URL ?? null,
     rpcUrl: raw.RPC_URL,
     rpcWsUrl: raw.RPC_WS_URL ?? deriveWsUrl(raw.RPC_URL),
-    activityLogPath: resolve(cwd, raw.ACTIVITY_LOG_PATH),
+    activityLogPath: resolve(
+      cwd,
+      sandbox ? DEFAULT_SANDBOX_ACTIVITY_LOG_PATH : raw.ACTIVITY_LOG_PATH,
+    ),
   };
+}
+
+/**
+ * The mode as an operator reads it. In the sandbox there is always a keypair,
+ * so the label is `sandbox (propose)` or `sandbox (auto)` — never a bare
+ * `propose` or `auto` that could be mistaken for the real board.
+ */
+export function modeLabel(config: Pick<Config, 'mode' | 'sandbox'>): string {
+  return config.sandbox ? `sandbox (${config.mode})` : config.mode;
 }
 
 /**
@@ -464,7 +588,9 @@ export function loadConfig(
  */
 export function describeConfig(config: Config): Record<string, unknown> {
   return {
-    mode: config.mode,
+    mode: modeLabel(config),
+    sandbox: config.sandbox,
+    sandbox_scenario: config.sandbox ? config.sandboxScenario : null,
     wallet: config.keypair ? config.keypair.publicKey.toBase58() : null,
     max_bid_lamports: config.maxBidLamports?.toString() ?? null,
     daily_cap_lamports: config.dailyCapLamports?.toString() ?? null,

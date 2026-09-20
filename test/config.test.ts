@@ -11,10 +11,13 @@ import {
   DEFAULT_ACTIVITY_LOG_PATH,
   DEFAULT_INTENT_PATH,
   DEFAULT_RPC_URL,
+  DEFAULT_SANDBOX_ACTIVITY_LOG_PATH,
+  SANDBOX_SCENARIOS,
   describeConfig,
   loadConfig,
   loadKeypair,
   mergeDotenv,
+  modeLabel,
 } from '../src/config.js';
 import {
   DEFAULT_PROPOSAL_TTL_MIN,
@@ -459,6 +462,183 @@ describe('.env handling', () => {
   });
 });
 
+describe('sandbox', () => {
+  const SANDBOX_LOG = DEFAULT_SANDBOX_ACTIVITY_LOG_PATH.replace('./', '');
+
+  it('is off by default and leaves a real config exactly as it was', () => {
+    const cfg = load({});
+    expect(cfg.sandbox).toBe(false);
+    expect(cfg.sandboxScenario).toBe('default');
+    expect(cfg.warnings).toEqual([]);
+    expect(cfg.activityLogPath).toBe(join(dir, DEFAULT_ACTIVITY_LOG_PATH.replace('./', '')));
+  });
+
+  it('accepts true, 1, false and 0, in any case and with whitespace', () => {
+    for (const on of ['true', 'TRUE', ' True ', '1', ' 1 ']) {
+      expect(load({ BILLBOARD_SANDBOX: on }).sandbox, on).toBe(true);
+    }
+    for (const off of ['false', 'FALSE', ' False ', '0', ' 0 ']) {
+      expect(load({ BILLBOARD_SANDBOX: off }).sandbox, off).toBe(false);
+    }
+  });
+
+  it('a blank value counts as unset, not as a typo', () => {
+    expect(load({ BILLBOARD_SANDBOX: '   ' }).sandbox).toBe(false);
+  });
+
+  it('refuses any other value, naming the variable and what it accepts', () => {
+    for (const bad of ['yes', 'no', 'on', 'off', '2', 'tru', 'sandbox']) {
+      const err = expectConfigError(
+        () => load({ BILLBOARD_SANDBOX: bad }),
+        /BILLBOARD_SANDBOX must be one of/,
+      );
+      expect(err.message).toContain('"true", "1", "false" or "0"');
+      expect(err.message).toContain(`got "${bad}"`);
+    }
+  });
+
+  it('accepts each scenario, in any case, and defaults to default', () => {
+    expect(load({ BILLBOARD_SANDBOX: 'true' }).sandboxScenario).toBe('default');
+    for (const scenario of SANDBOX_SCENARIOS) {
+      expect(
+        load({ BILLBOARD_SANDBOX: 'true', BILLBOARD_SANDBOX_SCENARIO: scenario }).sandboxScenario,
+      ).toBe(scenario);
+      expect(
+        load({ BILLBOARD_SANDBOX: 'true', BILLBOARD_SANDBOX_SCENARIO: scenario.toUpperCase() })
+          .sandboxScenario,
+      ).toBe(scenario);
+    }
+  });
+
+  it('refuses an unknown scenario, listing the three, whether or not the sandbox is on', () => {
+    for (const env of [{ BILLBOARD_SANDBOX: 'true' }, {}]) {
+      const err = expectConfigError(
+        () => load({ ...env, BILLBOARD_SANDBOX_SCENARIO: 'hostile' }),
+        /BILLBOARD_SANDBOX_SCENARIO must be one of/,
+      );
+      expect(err.message).toContain('default, adversarial, idle');
+      expect(err.message).toContain('got "hostile"');
+    }
+  });
+
+  it('needs no configuration: ephemeral wallet, MAX_BID_SOL 1, daily cap to match', () => {
+    const cfg = load({ BILLBOARD_SANDBOX: 'true' });
+    expect(cfg.sandbox).toBe(true);
+    expect(cfg.readOnly).toBe(false);
+    expect(cfg.keypair).not.toBeNull();
+    expect(cfg.mode).toBe('propose');
+    expect(modeLabel(cfg)).toBe('sandbox (propose)');
+    expect(cfg.maxBidLamports).toBe(1_000_000_000n);
+    expect(cfg.dailyCapLamports).toBe(1_000_000_000n);
+  });
+
+  it('generates a fresh keypair every time', () => {
+    const first = load({ BILLBOARD_SANDBOX: 'true' }).keypair;
+    const second = load({ BILLBOARD_SANDBOX: 'true' }).keypair;
+    expect(first?.publicKey.toBase58()).not.toBe(second?.publicKey.toBase58());
+  });
+
+  it('honours explicit limits and AUTO_BID', () => {
+    const cfg = load({
+      BILLBOARD_SANDBOX: '1',
+      MAX_BID_SOL: '0.2',
+      DAILY_CAP_SOL: '0.5',
+      AUTO_BID: 'true',
+    });
+    expect(cfg.maxBidLamports).toBe(200_000_000n);
+    expect(cfg.dailyCapLamports).toBe(500_000_000n);
+    expect(cfg.mode).toBe('auto');
+    expect(modeLabel(cfg)).toBe('sandbox (auto)');
+  });
+
+  it('never loads BILLBOARD_KEYPAIR: the wallet is ephemeral and the loader is not called', () => {
+    const cfg = load({ BILLBOARD_SANDBOX: 'true', BILLBOARD_KEYPAIR: SECRET_B58 });
+    expect(cfg.keypair?.publicKey.toBase58()).not.toBe(kp.publicKey.toBase58());
+
+    // A value the loader would refuse proves it never ran: in real mode this
+    // is a start-up error, in the sandbox it is simply ignored.
+    expectConfigError(
+      () => load({ BILLBOARD_KEYPAIR: 'not-a-keypair', MAX_BID_SOL: '0.1' }),
+      /BILLBOARD_KEYPAIR/,
+    );
+    expect(() =>
+      load({ BILLBOARD_SANDBOX: 'true', BILLBOARD_KEYPAIR: 'not-a-keypair' }),
+    ).not.toThrow();
+
+    // Nor does a keypair without MAX_BID_SOL fail, because no keypair is read.
+    expect(() => load({ BILLBOARD_SANDBOX: 'true', BILLBOARD_KEYPAIR: SECRET_B58 })).not.toThrow();
+  });
+
+  it('the supplied key appears in no warning and in no config view', () => {
+    const cfg = load({
+      BILLBOARD_SANDBOX: 'true',
+      BILLBOARD_KEYPAIR: SECRET_B58,
+      ACTIVITY_LOG_PATH: './somewhere.jsonl',
+    });
+    const text = cfg.warnings.join('\n') + JSON.stringify(describeConfig(cfg));
+    expect(text).not.toContain(SECRET_B58);
+    expect(text).not.toContain(Array.from(kp.secretKey.slice(0, 8)).join(','));
+    expect(text).not.toContain(kp.publicKey.toBase58());
+  });
+
+  it('warns once for each ignored variable, naming it', () => {
+    const cfg = load({
+      BILLBOARD_SANDBOX: 'true',
+      BILLBOARD_KEYPAIR: SECRET_B58,
+      RPC_URL: 'https://example.com',
+      RPC_WS_URL: 'wss://example.com',
+      ACTIVITY_LOG_PATH: './elsewhere.jsonl',
+    });
+    expect(cfg.warnings).toHaveLength(4);
+    for (const name of ['BILLBOARD_KEYPAIR', 'RPC_URL', 'RPC_WS_URL', 'ACTIVITY_LOG_PATH']) {
+      expect(
+        cfg.warnings.filter((w) => w.includes(name)),
+        name,
+      ).toHaveLength(1);
+    }
+    expect(load({ BILLBOARD_SANDBOX: 'true' }).warnings).toEqual([]);
+  });
+
+  it('forces the activity log to the sandbox file, whatever ACTIVITY_LOG_PATH says', () => {
+    const cfg = load({ BILLBOARD_SANDBOX: 'true', ACTIVITY_LOG_PATH: './real-money.jsonl' });
+    expect(cfg.activityLogPath).toBe(join(dir, SANDBOX_LOG));
+    expect(cfg.activityLogPath).not.toContain('real-money');
+  });
+
+  it('ignores the RPC variables, including ones that would not validate', () => {
+    const cfg = load({ BILLBOARD_SANDBOX: 'true', RPC_URL: 'not a url', RPC_WS_URL: 'nor this' });
+    expect(cfg.rpcUrl).toBe(DEFAULT_RPC_URL);
+    expect(cfg.warnings.some((w) => w.includes('RPC_URL'))).toBe(true);
+    expectConfigError(() => load({ RPC_URL: 'not a url' }), /RPC_URL must be a valid URL/);
+  });
+
+  it('still honours INTENT_PATH, PROPOSAL_TTL_MIN and HISTORY_URL', () => {
+    const cfg = load({
+      BILLBOARD_SANDBOX: 'true',
+      INTENT_PATH: './rehearsal.md',
+      PROPOSAL_TTL_MIN: '5',
+      HISTORY_URL: 'https://example.com/history.json',
+    });
+    expect(cfg.intentPath).toBe(join(dir, 'rehearsal.md'));
+    expect(cfg.proposalTtlMin).toBe(5);
+    expect(cfg.historyUrl).toBe('https://example.com/history.json');
+  });
+
+  it('describeConfig says which board this is', () => {
+    const view = describeConfig(
+      load({ BILLBOARD_SANDBOX: 'true', BILLBOARD_SANDBOX_SCENARIO: 'adversarial' }),
+    );
+    expect(view.sandbox).toBe(true);
+    expect(view.sandbox_scenario).toBe('adversarial');
+    expect(view.mode).toBe('sandbox (propose)');
+
+    const real = describeConfig(load({}));
+    expect(real.sandbox).toBe(false);
+    expect(real.sandbox_scenario).toBeNull();
+    expect(real.mode).toBe('read-only');
+  });
+});
+
 describe('secrecy', () => {
   it('describeConfig exposes the public key and never the secret', () => {
     const cfg = load({ BILLBOARD_KEYPAIR: SECRET_B58, MAX_BID_SOL: '0.25', AUTO_BID: 'true' });
@@ -496,6 +676,8 @@ describe('secrecy', () => {
         'ACTIVITY_LOG_PATH',
         'AUTO_BID',
         'BILLBOARD_KEYPAIR',
+        'BILLBOARD_SANDBOX',
+        'BILLBOARD_SANDBOX_SCENARIO',
         'DAILY_CAP_SOL',
         'HISTORY_URL',
         'INTENT_PATH',

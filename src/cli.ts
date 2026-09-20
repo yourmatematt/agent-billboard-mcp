@@ -22,6 +22,10 @@ import {
   DEFAULT_ACTIVITY_LOG_PATH,
   DEFAULT_INTENT_PATH,
   DEFAULT_RPC_URL,
+  DEFAULT_SANDBOX_ACTIVITY_LOG_PATH,
+  DEFAULT_SANDBOX_MAX_BID_SOL,
+  DEFAULT_SANDBOX_SCENARIO,
+  SANDBOX_SCENARIOS,
   loadConfig,
   type Config,
   type ConfigVar,
@@ -65,9 +69,12 @@ export function parseArgs(argv: readonly string[]): CliCommand {
 
 /** One line per environment variable, in the order of `CONFIG_VARS`. */
 export const CONFIG_HELP: Readonly<Record<ConfigVar, string>> = {
+  BILLBOARD_SANDBOX:
+    'true or 1 = rehearse against a simulated board with an ephemeral wallet: no network, no SOL, nothing on-chain. false or 0 (default) = the real board. No other value is accepted.',
+  BILLBOARD_SANDBOX_SCENARIO: `which simulated board the sandbox starts from: ${SANDBOX_SCENARIOS.join(', ')}. Default: ${DEFAULT_SANDBOX_SCENARIO}. Ignored unless BILLBOARD_SANDBOX is on.`,
   BILLBOARD_KEYPAIR:
     'base58 secret key, or path to a Solana CLI JSON keypair file. Unset = read-only mode.',
-  MAX_BID_SOL: 'largest single bid the server will sign, in SOL. Required when a keypair is set.',
+  MAX_BID_SOL: `largest single bid the server will sign, in SOL. Required when a keypair is set. In the sandbox it defaults to ${DEFAULT_SANDBOX_MAX_BID_SOL}.`,
   DAILY_CAP_SOL: 'total gross bids allowed per rolling 24 h, in SOL. Default: MAX_BID_SOL.',
   AUTO_BID:
     'true = write tools sign directly within limits. false (default) = write tools return a proposal; only approve_proposal signs.',
@@ -75,10 +82,10 @@ export const CONFIG_HELP: Readonly<Record<ConfigVar, string>> = {
   INTENT_PATH: `path to the operator-written intent file. Default: ${DEFAULT_INTENT_PATH}. Missing file = intent null.`,
   HISTORY_URL:
     'optional URL of the site-published history.json. Unset or unreachable = derive on-chain.',
-  RPC_URL: `Solana JSON-RPC endpoint. Default: ${DEFAULT_RPC_URL}.`,
+  RPC_URL: `Solana JSON-RPC endpoint. Default: ${DEFAULT_RPC_URL}. Ignored in the sandbox.`,
   RPC_WS_URL:
-    'websocket endpoint for account subscriptions. Default: RPC_URL with https replaced by wss.',
-  ACTIVITY_LOG_PATH: `append-only JSONL activity log. Default: ${DEFAULT_ACTIVITY_LOG_PATH}.`,
+    'websocket endpoint for account subscriptions. Default: RPC_URL with https replaced by wss. Ignored in the sandbox.',
+  ACTIVITY_LOG_PATH: `append-only JSONL activity log. Default: ${DEFAULT_ACTIVITY_LOG_PATH}. Ignored in the sandbox, which always writes to ${DEFAULT_SANDBOX_ACTIVITY_LOG_PATH}.`,
 };
 
 export function helpText(): string {
@@ -99,6 +106,9 @@ export function helpText(): string {
     '  read-only   no BILLBOARD_KEYPAIR. read_billboard, get_flip_history and dry runs work; write tools refuse.',
     '  propose     keypair set, AUTO_BID unset or false. Write tools return a proposal; approve_proposal signs it.',
     '  auto        keypair set, AUTO_BID=true. Write tools sign directly, still inside MAX_BID_SOL / DAILY_CAP_SOL.',
+    '  sandbox     BILLBOARD_SANDBOX=true. A simulated board with an ephemeral wallet: no network, no SOL, nothing',
+    '              on-chain. AUTO_BID is honoured, so the mode reads sandbox (propose) or sandbox (auto). Rehearse',
+    '              the whole walk here, then unset BILLBOARD_SANDBOX to run against the real board.',
     '',
     'Environment (a .env file in the working directory is read; real environment wins):',
     vars,
@@ -147,14 +157,23 @@ const MODE_TEXT: Record<Config['mode'], string> = {
   auto: 'auto (write tools sign directly, inside the limits below)',
 };
 
+const SANDBOX_MODE_TEXT: Readonly<Record<'propose' | 'auto', string>> = {
+  propose:
+    'sandbox (propose) (simulated board; write tools return proposals, approve_proposal completes the rehearsal)',
+  auto: 'sandbox (auto) (simulated board; write tools complete directly, inside the limits below)',
+};
+
+/** The mode line an operator reads in the banner. */
+export function modeText(config: Config): string {
+  if (!config.sandbox) return MODE_TEXT[config.mode];
+  return config.mode === 'auto' ? SANDBOX_MODE_TEXT.auto : SANDBOX_MODE_TEXT.propose;
+}
+
 /** The start-up banner, one fact per line. Never includes the secret key. */
 export function formatBanner(input: BannerInput): string {
   const { config } = input;
   const version = input.version ?? PACKAGE_VERSION;
-  const lines: string[] = [
-    `${PACKAGE_NAME} v${version}`,
-    `  mode          ${MODE_TEXT[config.mode]}`,
-  ];
+  const lines: string[] = [`${PACKAGE_NAME} v${version}`, `  mode          ${modeText(config)}`];
 
   if (config.keypair !== null) {
     lines.push(`  wallet        ${config.keypair.publicKey.toBase58()}`);
@@ -173,7 +192,9 @@ export function formatBanner(input: BannerInput): string {
     );
   }
 
-  lines.push(`  rpc           ${rpcHost(config.rpcUrl)}`);
+  lines.push(
+    `  rpc           ${config.sandbox ? 'simulated in process (RPC_URL is ignored; no network call is made)' : rpcHost(config.rpcUrl)}`,
+  );
   lines.push(`  billboard     ${BILLBOARD_ADDRESS.toBase58()} (PDA verified)`);
   lines.push(
     `  subscription  ${input.subscribed ? 'account changes via websocket' : config.keypair === null ? 'not started (read-only)' : 'unavailable, state is fetched on each read'}`,
@@ -222,6 +243,7 @@ async function serve(): Promise<void> {
   deriveBillboardPda();
 
   const config = loadConfig();
+  for (const warning of config.warnings) stderr(`${PACKAGE_NAME}: warning: ${warning}`);
   const rpc = new SolanaRpc({ rpcUrl: config.rpcUrl, wsUrl: config.rpcWsUrl });
   const context = createContext(config, rpc);
   const server = createServer(context);
