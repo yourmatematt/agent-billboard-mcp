@@ -16,3 +16,7 @@ PROGRESS.md
 docs/HANDOVER-FOR-MATT.md
 reference/HANDOFF-BRIEF.md
 reference/acquire.rs
+
+# Local tooling and the ClawHub skill working copy
+.codex/
+agent-billboard/
