@@ -129,6 +129,7 @@ describe('read_billboard in read-only mode', () => {
       fetched_at: T0.toISOString(),
       public_state_url: 'https://i.xn--5t8h.ws/billboard.json',
       site_url: 'https://xn--5t8h.ws/',
+      sandbox: false,
     });
 
     const lines = text.split('\n');

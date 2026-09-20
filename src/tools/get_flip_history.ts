@@ -19,7 +19,7 @@ import {
 } from '../billboard/history.js';
 import { lamportsToSol } from '../program/math.js';
 import type { ServerContext } from '../server.js';
-import { solString } from './shared.js';
+import { sandboxOutputShape, solString, withSandboxNotice } from './shared.js';
 
 export const GET_FLIP_HISTORY_TOOL = 'get_flip_history';
 
@@ -74,6 +74,7 @@ export const getFlipHistoryOutputShape = {
     .enum(['history_url', 'on-chain'])
     .describe('Where the list came from. "on-chain" is derived from Acquired events.'),
   fetched_at: z.string(),
+  ...sandboxOutputShape,
 };
 
 const getFlipHistoryOutputSchema = z.object(getFlipHistoryOutputShape);
@@ -99,10 +100,14 @@ export async function getFlipHistory(
     fetch: context.fetch,
     warn: context.warn,
   });
-  return shapeHistory(history, fetchedAt);
+  return shapeHistory(history, fetchedAt, context.config.sandbox);
 }
 
-export function shapeHistory(history: FlipHistory, fetchedAt: Date): GetFlipHistoryOutput {
+export function shapeHistory(
+  history: FlipHistory,
+  fetchedAt: Date,
+  sandbox: boolean,
+): GetFlipHistoryOutput {
   return {
     flips: history.flips.map((flip) => ({
       poster: flip.poster.toBase58(),
@@ -118,6 +123,7 @@ export function shapeHistory(history: FlipHistory, fetchedAt: Date): GetFlipHist
     },
     source: history.source,
     fetched_at: fetchedAt.toISOString(),
+    sandbox,
   };
 }
 
@@ -148,7 +154,7 @@ export function formatFlipHistoryText(output: GetFlipHistoryOutput): string {
     );
   }
   lines.push(JSON.stringify(output, null, 2));
-  return lines.join('\n');
+  return withSandboxNotice(output.sandbox, lines.join('\n'));
 }
 
 export function registerGetFlipHistory(server: McpServer, context: ServerContext): void {
@@ -176,7 +182,15 @@ export function registerGetFlipHistory(server: McpServer, context: ServerContext
         const message = err instanceof Error ? err.message : String(err);
         return {
           isError: true,
-          content: [{ type: 'text', text: `get_flip_history failed: ${message}` }],
+          content: [
+            {
+              type: 'text',
+              text: withSandboxNotice(
+                context.config.sandbox,
+                `get_flip_history failed: ${message}`,
+              ),
+            },
+          ],
         };
       }
       return {

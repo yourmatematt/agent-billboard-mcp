@@ -28,7 +28,9 @@ import {
   proposedText,
   reasoningSchema,
   safePeek,
+  sandboxOutputShape,
   solString,
+  withSandboxNotice,
 } from './shared.js';
 
 export const CLEAR_TOOL = 'clear_message';
@@ -62,6 +64,7 @@ export const clearOutputShape = {
   signatures: z.array(z.string()),
   billboard_after: billboardAfterShape.optional(),
   ...proposalOutputShape,
+  ...sandboxOutputShape,
 };
 
 const clearOutputSchema = z.object(clearOutputShape);
@@ -178,6 +181,7 @@ export async function clearMessage(
     existing_bytes: before.messageBytes,
     transactions_sent: 0,
     signatures: [] as string[],
+    sandbox: config.sandbox,
   };
 
   if (config.readOnly || config.keypair === null) {
@@ -250,7 +254,7 @@ export function formatClearText(output: ClearOutput): string {
       summary = `Failed: ${output.reason ?? ''}`;
       break;
   }
-  return `${summary}\n${JSON.stringify(output, null, 2)}`;
+  return withSandboxNotice(output.sandbox, `${summary}\n${JSON.stringify(output, null, 2)}`);
 }
 
 export function registerClearMessage(server: McpServer, context: ServerContext): void {
@@ -280,11 +284,19 @@ export function registerClearMessage(server: McpServer, context: ServerContext):
         const message = err instanceof Error ? err.message : String(err);
         return {
           isError: true,
-          content: [{ type: 'text', text: `${CLEAR_TOOL} failed: ${message}` }],
+          content: [
+            {
+              type: 'text',
+              text: withSandboxNotice(context.config.sandbox, `${CLEAR_TOOL} failed: ${message}`),
+            },
+          ],
         };
       }
       if ('text' in output) {
-        return { isError: true, content: [{ type: 'text', text: output.text }] };
+        return {
+          isError: true,
+          content: [{ type: 'text', text: withSandboxNotice(context.config.sandbox, output.text) }],
+        };
       }
       const isError = output.status !== 'executed' && output.status !== 'proposed';
       return {

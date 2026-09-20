@@ -68,7 +68,9 @@ import {
   proposedText,
   reasoningSchema,
   safePeek,
+  sandboxOutputShape,
   solString,
+  withSandboxNotice,
 } from './shared.js';
 
 export const ACQUIRE_TOOL = 'acquire_posting_rights';
@@ -169,6 +171,7 @@ export const acquireOutputShape = {
   signatures: z.array(z.string()).describe('Transaction signatures, in the order they landed.'),
   billboard_after: billboardAfterShape.optional(),
   ...proposalOutputShape,
+  ...sandboxOutputShape,
 };
 
 const acquireOutputSchema = z.object(acquireOutputShape);
@@ -437,6 +440,7 @@ function baseOutput(
   | 'transactions_planned'
   | 'transactions_sent'
   | 'signatures'
+  | 'sandbox'
 > {
   return {
     current_poster: before.poster.toBase58(),
@@ -449,6 +453,7 @@ function baseOutput(
     transactions_planned: 0,
     transactions_sent: 0,
     signatures: [],
+    sandbox: context.config.sandbox,
   };
 }
 
@@ -602,7 +607,7 @@ export function formatAcquireText(output: AcquireOutput): string {
       summary = `Failed: ${output.reason ?? ''}`;
       break;
   }
-  return `${summary}\n${JSON.stringify(output, null, 2)}`;
+  return withSandboxNotice(output.sandbox, `${summary}\n${JSON.stringify(output, null, 2)}`);
 }
 
 export function registerAcquirePostingRights(server: McpServer, context: ServerContext): void {
@@ -635,11 +640,19 @@ export function registerAcquirePostingRights(server: McpServer, context: ServerC
         const message = err instanceof Error ? err.message : String(err);
         return {
           isError: true,
-          content: [{ type: 'text', text: `${ACQUIRE_TOOL} failed: ${message}` }],
+          content: [
+            {
+              type: 'text',
+              text: withSandboxNotice(context.config.sandbox, `${ACQUIRE_TOOL} failed: ${message}`),
+            },
+          ],
         };
       }
       if ('text' in output) {
-        return { isError: true, content: [{ type: 'text', text: output.text }] };
+        return {
+          isError: true,
+          content: [{ type: 'text', text: withSandboxNotice(context.config.sandbox, output.text) }],
+        };
       }
       const isError =
         output.status === 'refused' || output.status === 'failed' || output.error !== undefined;

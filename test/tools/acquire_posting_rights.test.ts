@@ -216,6 +216,7 @@ describe('dry_run', () => {
       transactions_planned: 1,
       transactions_sent: 0,
       signatures: [],
+      sandbox: false,
     });
     expect(text).toContain('Nothing was signed');
     expect(text).toContain('0.1005');

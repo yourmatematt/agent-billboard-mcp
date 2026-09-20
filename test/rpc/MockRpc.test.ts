@@ -11,7 +11,12 @@ import {
   decodeAcquiredEvent,
   decodeBillboard,
 } from '../../src/program/layout.js';
-import { ANCHOR_ERRORS, BILLBOARD_ACCOUNT_SIZE, MockRpc } from '../../src/rpc/MockRpc.js';
+import {
+  ANCHOR_ERRORS,
+  BILLBOARD_ACCOUNT_SIZE,
+  MOCK_SIGNATURE_RE,
+  MockRpc,
+} from '../../src/rpc/MockRpc.js';
 import { RpcError } from '../../src/rpc/Rpc.js';
 
 const SOL = 1_000_000_000n;
@@ -101,8 +106,10 @@ describe('MockRpc acquire rules', () => {
       ),
     );
     const signature = await rpc.sendAndConfirm(tx, [bidder]);
-    expect(typeof signature).toBe('string');
-    expect(signature.length).toBeGreaterThan(80);
+    // Not base58: a simulated signature must never look pasteable into an
+    // explorer, even though the transaction above was really signed.
+    expect(signature).toMatch(MOCK_SIGNATURE_RE);
+    expect(signature).toBe('SANDBOX-1');
 
     const state = rpc.billboard;
     expect(state.poster.equals(bidder.publicKey)).toBe(true);

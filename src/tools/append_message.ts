@@ -45,7 +45,9 @@ import {
   proposedText,
   reasoningSchema,
   safePeek,
+  sandboxOutputShape,
   solString,
+  withSandboxNotice,
 } from './shared.js';
 
 export const APPEND_TOOL = 'append_message';
@@ -104,6 +106,7 @@ export const appendOutputShape = {
   signatures: z.array(z.string()).describe('Transaction signatures, in the order they landed.'),
   billboard_after: billboardAfterShape.optional(),
   ...proposalOutputShape,
+  ...sandboxOutputShape,
 };
 
 const appendOutputSchema = z.object(appendOutputShape);
@@ -270,6 +273,7 @@ function baseOutput(
     transactions_planned: 0,
     transactions_sent: 0,
     signatures: [],
+    sandbox: context.config.sandbox,
   };
 }
 
@@ -366,7 +370,7 @@ export function formatAppendText(output: AppendOutput): string {
       summary = `Failed: ${output.reason ?? ''}`;
       break;
   }
-  return `${summary}\n${JSON.stringify(output, null, 2)}`;
+  return withSandboxNotice(output.sandbox, `${summary}\n${JSON.stringify(output, null, 2)}`);
 }
 
 export function registerAppendMessage(server: McpServer, context: ServerContext): void {
@@ -399,11 +403,19 @@ export function registerAppendMessage(server: McpServer, context: ServerContext)
         const message = err instanceof Error ? err.message : String(err);
         return {
           isError: true,
-          content: [{ type: 'text', text: `${APPEND_TOOL} failed: ${message}` }],
+          content: [
+            {
+              type: 'text',
+              text: withSandboxNotice(context.config.sandbox, `${APPEND_TOOL} failed: ${message}`),
+            },
+          ],
         };
       }
       if ('text' in output) {
-        return { isError: true, content: [{ type: 'text', text: output.text }] };
+        return {
+          isError: true,
+          content: [{ type: 'text', text: withSandboxNotice(context.config.sandbox, output.text) }],
+        };
       }
       const isError =
         (output.status !== 'executed' && output.status !== 'proposed') ||

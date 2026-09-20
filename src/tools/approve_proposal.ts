@@ -52,7 +52,14 @@ import {
 } from './acquire_posting_rights.js';
 import { executeAppend, planAppend } from './append_message.js';
 import { executeClear, planClear } from './clear_message.js';
-import { READ_ONLY_TEXT, afterFigures, billboardAfterShape, solString } from './shared.js';
+import {
+  READ_ONLY_TEXT,
+  afterFigures,
+  billboardAfterShape,
+  sandboxOutputShape,
+  solString,
+  withSandboxNotice,
+} from './shared.js';
 
 export const APPROVE_TOOL = APPROVE_LOG_TOOL;
 
@@ -135,6 +142,7 @@ export const approveOutputShape = {
   transactions_sent: z.number().int().min(0),
   signatures: z.array(z.string()),
   billboard_after: billboardAfterShape.optional(),
+  ...sandboxOutputShape,
 };
 
 const approveOutputSchema = z.object(approveOutputShape);
@@ -288,6 +296,7 @@ export async function approveProposal(
         ? { proposal_id: proposalId }
         : describeProposal(refusal.proposal)),
       ...EMPTY_EXECUTION,
+      sandbox: config.sandbox,
       ...(refusal.supersededBy === undefined ? {} : { superseded_by: refusal.supersededBy }),
       status: 'refused',
       error: refusal.error,
@@ -299,7 +308,12 @@ export async function approveProposal(
 
   const read = await reader.read();
   const now = read.state;
-  const base = { ...described, ...EMPTY_EXECUTION, billboard_now: board(now) };
+  const base = {
+    ...described,
+    ...EMPTY_EXECUTION,
+    billboard_now: board(now),
+    sandbox: config.sandbox,
+  };
 
   if (!statesEqual(proposal.before, now)) {
     proposals.settle(proposalId, 'stale');
@@ -442,7 +456,7 @@ export function formatApproveText(output: ApproveOutput): string {
       summary = `Approved but failed: ${output.reason ?? ''}`;
       break;
   }
-  return `${summary}\n${JSON.stringify(output, null, 2)}`;
+  return withSandboxNotice(output.sandbox, `${summary}\n${JSON.stringify(output, null, 2)}`);
 }
 
 export function registerApproveProposal(server: McpServer, context: ServerContext): void {
@@ -475,11 +489,19 @@ export function registerApproveProposal(server: McpServer, context: ServerContex
         const message = err instanceof Error ? err.message : String(err);
         return {
           isError: true,
-          content: [{ type: 'text', text: `${APPROVE_TOOL} failed: ${message}` }],
+          content: [
+            {
+              type: 'text',
+              text: withSandboxNotice(context.config.sandbox, `${APPROVE_TOOL} failed: ${message}`),
+            },
+          ],
         };
       }
       if ('text' in output) {
-        return { isError: true, content: [{ type: 'text', text: output.text }] };
+        return {
+          isError: true,
+          content: [{ type: 'text', text: withSandboxNotice(context.config.sandbox, output.text) }],
+        };
       }
       const isError = output.status !== 'executed' || output.error !== undefined;
       return {

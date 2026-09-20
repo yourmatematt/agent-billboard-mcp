@@ -45,6 +45,35 @@ export function afterFigures(context: ServerContext, after: BillboardState): Bil
   };
 }
 
+/**
+ * The line every sandbox result opens with.
+ *
+ * A rehearsal must never be mistaken for the real thing, and the human-
+ * readable block is the only part some clients ever show. So the marker goes
+ * first, before any figure, on every tool and every outcome.
+ */
+export const SANDBOX_NOTICE =
+  'SANDBOX — simulated board. No real SOL, no transaction, nothing on-chain.';
+
+/**
+ * The output field every tool carries. `true` only under BILLBOARD_SANDBOX,
+ * so a client that reads `structuredContent` can tell rehearsal from the real
+ * board without parsing the text block.
+ */
+export const sandboxOutputShape = {
+  sandbox: z
+    .boolean()
+    .describe(
+      'True when BILLBOARD_SANDBOX is on: a simulated board, an ephemeral wallet, no real SOL ' +
+        'and nothing on-chain. False on the real billboard.',
+    ),
+};
+
+/** Prefixes a human-readable block with `SANDBOX_NOTICE` when sandbox is on. */
+export function withSandboxNotice(sandbox: boolean, text: string): string {
+  return sandbox ? `${SANDBOX_NOTICE}\n${text}` : text;
+}
+
 /** Text returned by every write tool when no keypair is configured. */
 export const READ_ONLY_TEXT =
   'read-only mode: no keypair is configured, so nothing can be signed. ' +

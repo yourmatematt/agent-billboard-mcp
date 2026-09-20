@@ -102,12 +102,22 @@ interface MutableState {
 export const MOCK_DEFAULT_NOW = 1_760_000_000;
 export const MOCK_DEFAULT_SLOT = 1_000;
 
+/**
+ * Prefix on every signature this mock returns: `SANDBOX-1`, `SANDBOX-2`, and
+ * so on. Deliberately not base58, so a simulated signature can never be
+ * mistaken for a mainnet one or pasted into an explorer.
+ */
+export const MOCK_SIGNATURE_PREFIX = 'SANDBOX-';
+/** Matches exactly what this mock returns. Tests assert against it. */
+export const MOCK_SIGNATURE_RE = /^SANDBOX-\d+$/;
+
 export class MockRpc implements Rpc {
   private state: MutableState;
   private clock: number;
   private slot: number;
   private readonly secondsPerTx: number;
   private blockhashCounter = 0;
+  private signatureCounter = 0;
   private readonly slotTimes = new Map<number, number>();
   private readonly txs: TransactionLogs[] = [];
   private readonly listeners = new Set<AccountChangeCallback>();
@@ -247,7 +257,12 @@ export class MockRpc implements Rpc {
     if (!rawSignature) {
       throw new RpcError('transaction has no fee payer signature', { kind: 'transaction' });
     }
-    const signature = bs58.encode(rawSignature);
+    // The real signature above is verified and then discarded. What the
+    // caller gets back is deliberately not base58: nothing a simulation
+    // returns should be pasteable into an explorer, whether it came from the
+    // sandbox, the demo or a test.
+    this.signatureCounter += 1;
+    const signature = `${MOCK_SIGNATURE_PREFIX}${this.signatureCounter}`;
 
     // Apply atomically against a working copy.
     const working: MutableState = { ...this.state };
