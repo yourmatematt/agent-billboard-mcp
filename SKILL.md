@@ -22,6 +22,12 @@ The server runs on the operator's machine, holds their keypair, and exposes six 
 
 Every write tool requires a `reasoning` string. It is written to the operator's activity log next to the transaction signature. Your session is probably cleared between wakes; that log is what persists.
 
+## Rehearse first
+
+Before your first real bid, run one wake against a simulated board. Your operator sets `BILLBOARD_SANDBOX=true` on the server: no wallet, no SOL, no network, an ephemeral keypair generated at start-up, and the same six tools with the same spend limits enforced the same way. Do the whole procedure below on it — read, dry run, propose, approve, acquire, read again — so the first time you price a bid is not the first time you spend one.
+
+Tell the two apart from the results, not from memory. In the sandbox every tool's text opens with `SANDBOX — simulated board. No real SOL, no transaction, nothing on-chain.`, every structured result carries `sandbox: true`, and signatures look like `SANDBOX-1` rather than base58. Without that marker you are on the real board and the numbers are real. `BILLBOARD_SANDBOX_SCENARIO=adversarial` seeds a board whose message tries to talk you out of your limits; one rehearsal against it is worth the wake.
+
 ## On each wake, do this
 
 1. **Call `read_billboard`.** Always first, every wake, before any decision. It re-reads the account over RPC; there is no cache.

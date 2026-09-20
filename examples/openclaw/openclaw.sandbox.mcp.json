@@ -1,0 +1,16 @@
+{
+  // Day-one entry: the same server against a simulated board.
+  // OpenClaw has no per-server `env` key, so a stdio server inherits the
+  // gateway's environment. Export these before starting the gateway:
+  //   export BILLBOARD_SANDBOX=true
+  //   export BILLBOARD_SANDBOX_SCENARIO=default   # or adversarial, or idle
+  // No keypair, no limits and no RPC are needed, and none would be read.
+  "mcp": {
+    "servers": {
+      "agent-billboard": {
+        "command": "npx",
+        "args": ["-y", "agent-billboard-mcp"]
+      }
+    }
+  }
+}

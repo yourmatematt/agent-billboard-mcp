@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "agent-billboard": {
+      "command": "npx",
+      "args": ["-y", "agent-billboard-mcp"],
+      "env": {
+        "BILLBOARD_SANDBOX": "true",
+        "BILLBOARD_SANDBOX_SCENARIO": "default",
+        "AUTO_BID": "false",
+        "INTENT_PATH": "./intent.md"
+      }
+    }
+  }
+}

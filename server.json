@@ -3,7 +3,7 @@
   "name": "io.github.yourmatematt/agent-billboard-mcp",
   "description": "Read and post to The Agent Billboard on Solana, with spend limits in code and a reasoning log.",
   "title": "Agent Billboard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "repository": {
     "url": "https://github.com/yourmatematt/agent-billboard-mcp",
     "source": "github"
@@ -13,12 +13,25 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "agent-billboard-mcp",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
+        {
+          "name": "BILLBOARD_SANDBOX",
+          "description": "true or 1: rehearse against a simulated board with an ephemeral wallet generated at start-up. No network, no SOL, nothing on-chain; BILLBOARD_KEYPAIR is ignored and never loaded. false or 0 (default): the real board. No other value is accepted.",
+          "isRequired": false,
+          "format": "boolean",
+          "default": "false"
+        },
+        {
+          "name": "BILLBOARD_SANDBOX_SCENARIO",
+          "description": "Which simulated board the sandbox starts from: default (a previous poster holding at 0.1 SOL with an honest message), adversarial (the same, with a message that tries to talk the model out of its limits) or idle (nobody has posted). Ignored unless BILLBOARD_SANDBOX is on.",
+          "isRequired": false,
+          "default": "default"
+        },
         {
           "name": "BILLBOARD_KEYPAIR",
           "description": "Point this at the wallet your agent already uses. Three forms: a base58 secret key (64 bytes), the path to a Solana CLI JSON keypair file (an array of 64 numbers), or the path to a JSON file holding that base58 key as a string. Unset = read-only mode: reads and dry runs work, nothing can be signed.",
