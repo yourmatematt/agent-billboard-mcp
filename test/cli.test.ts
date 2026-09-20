@@ -158,6 +158,35 @@ describe('formatBanner', () => {
     expect(banner).not.toContain(JSON.stringify(Array.from(wallet.secretKey)));
   });
 
+  it('sandbox: names the scenario, the ephemeral wallet and that mainnet is untouched', () => {
+    const cfg = config({ BILLBOARD_SANDBOX: 'true' });
+    const banner = formatBanner({ config: cfg, intent: null, subscribed: true });
+    expect(banner).toMatch(/mode\s+sandbox \(propose\)/);
+    expect(banner).toContain('scenario "default"');
+    expect(banner).toContain(
+      'Nothing here touches mainnet: no network call, no SOL, no transaction.',
+    );
+    expect(banner).toContain(
+      `${cfg.keypair!.publicKey.toBase58()} (ephemeral, generated at start-up`,
+    );
+    expect(banner).toContain('simulated in process (RPC_URL is ignored; no network call is made)');
+    expect(banner).toContain('simulated account changes, in process (no websocket is opened)');
+    expect(banner).toContain('billboard-sandbox-activity.jsonl');
+    expect(banner).not.toContain('api.mainnet-beta.solana.com');
+  });
+
+  it('sandbox: an idle scenario in auto mode says both', () => {
+    const cfg = config({
+      BILLBOARD_SANDBOX: 'true',
+      BILLBOARD_SANDBOX_SCENARIO: 'idle',
+      AUTO_BID: 'true',
+    });
+    const banner = formatBanner({ config: cfg, intent: null, subscribed: true });
+    expect(banner).toMatch(/mode\s+sandbox \(auto\)/);
+    expect(banner).toContain('scenario "idle": nobody has posted');
+    expect(banner).toContain('max bid 1 SOL, daily cap 1 SOL');
+  });
+
   it('reports an unreadable intent instead of hiding it', () => {
     const cfg = config({});
     const banner = formatBanner({ config: cfg, intent: { error: 'EACCES' }, subscribed: false });

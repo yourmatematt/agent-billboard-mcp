@@ -11,6 +11,10 @@
  * known address → load and validate config → build the RPC, context and
  * server → connect stdio → subscribe to account changes (write modes) →
  * start the proposal sweeper (propose mode) → print the banner.
+ *
+ * The sandbox is a choice made here and nowhere else: `createRuntime` hands
+ * the server a seeded `MockRpc` instead of a `SolanaRpc`. The server core and
+ * the tools never learn which one they have.
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -38,8 +42,10 @@ import {
   MAX_PROPOSAL_TTL_MIN,
   MIN_PROPOSAL_TTL_MIN,
 } from './proposals.js';
+import type { Rpc } from './rpc/Rpc.js';
 import { SolanaRpc } from './rpc/SolanaRpc.js';
-import { createContext, createServer } from './server.js';
+import { SANDBOX_SEEDS, createSandboxRpc, sandboxFetch } from './sandbox.js';
+import { createContext, createServer, type ServerContext } from './server.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './version.js';
 
 // ---------------------------------------------------------------------------
@@ -175,8 +181,15 @@ export function formatBanner(input: BannerInput): string {
   const version = input.version ?? PACKAGE_VERSION;
   const lines: string[] = [`${PACKAGE_NAME} v${version}`, `  mode          ${modeText(config)}`];
 
+  if (config.sandbox) {
+    lines.push(
+      `  sandbox       scenario "${config.sandboxScenario}": ${SANDBOX_SEEDS[config.sandboxScenario].description}. ` +
+        'Nothing here touches mainnet: no network call, no SOL, no transaction.',
+    );
+  }
   if (config.keypair !== null) {
-    lines.push(`  wallet        ${config.keypair.publicKey.toBase58()}`);
+    const ephemeral = config.sandbox ? ' (ephemeral, generated at start-up, never funded)' : '';
+    lines.push(`  wallet        ${config.keypair.publicKey.toBase58()}${ephemeral}`);
   }
   if (config.maxBidLamports !== null && config.dailyCapLamports !== null) {
     lines.push(
@@ -196,9 +209,14 @@ export function formatBanner(input: BannerInput): string {
     `  rpc           ${config.sandbox ? 'simulated in process (RPC_URL is ignored; no network call is made)' : rpcHost(config.rpcUrl)}`,
   );
   lines.push(`  billboard     ${BILLBOARD_ADDRESS.toBase58()} (PDA verified)`);
-  lines.push(
-    `  subscription  ${input.subscribed ? 'account changes via websocket' : config.keypair === null ? 'not started (read-only)' : 'unavailable, state is fetched on each read'}`,
-  );
+  const subscription = input.subscribed
+    ? config.sandbox
+      ? 'simulated account changes, in process (no websocket is opened)'
+      : 'account changes via websocket'
+    : config.keypair === null
+      ? 'not started (read-only)'
+      : 'unavailable, state is fetched on each read';
+  lines.push(`  subscription  ${subscription}`);
   lines.push(`  activity log  ${config.activityLogPath}`);
 
   const intent = input.intent;
@@ -237,6 +255,24 @@ const stderr = (line: string): void => {
 /** How long shutdown waits for the event loop to drain before forcing exit. */
 const SHUTDOWN_GRACE_MS = 5000;
 
+/**
+ * Builds the RPC the mode calls for and the context around it.
+ *
+ * This is the only place the sandbox is decided. In the sandbox it returns a
+ * `MockRpc` seeded from the scenario and a context whose `fetch` refuses, so
+ * a rehearsal makes no outbound request even when `HISTORY_URL` is set;
+ * `SolanaRpc` is never constructed. Exported so tests can assert exactly that
+ * without starting a transport.
+ */
+export async function createRuntime(config: Config): Promise<{ rpc: Rpc; context: ServerContext }> {
+  if (config.sandbox) {
+    const rpc = await createSandboxRpc(config.sandboxScenario);
+    return { rpc, context: createContext(config, rpc, { fetch: sandboxFetch }) };
+  }
+  const rpc = new SolanaRpc({ rpcUrl: config.rpcUrl, wsUrl: config.rpcWsUrl });
+  return { rpc, context: createContext(config, rpc) };
+}
+
 async function serve(): Promise<void> {
   // Refuse to start if the constants and the derivation disagree: every
   // transaction the server ever builds targets this address.
@@ -244,8 +280,7 @@ async function serve(): Promise<void> {
 
   const config = loadConfig();
   for (const warning of config.warnings) stderr(`${PACKAGE_NAME}: warning: ${warning}`);
-  const rpc = new SolanaRpc({ rpcUrl: config.rpcUrl, wsUrl: config.rpcWsUrl });
-  const context = createContext(config, rpc);
+  const { context } = await createRuntime(config);
   const server = createServer(context);
   const transport = new StdioServerTransport();
 
