@@ -187,7 +187,7 @@ describe('scripts/demo.ts', () => {
     expect(headers[10]).toContain('11. get_flip_history');
     expect(lines.some((l) => l.startsWith('### (not a tool call) outside acquire'))).toBe(true);
     expect(lines.filter((l) => l === 'structuredContent:')).toHaveLength(
-      result.steps.length + result.loopSteps.length,
+      result.steps.length + result.loopSteps.length + result.injectionSteps.length,
     );
     const logHeader = lines.findIndex((l) => l.startsWith('### Activity log (10 lines'));
     expect(logHeader).toBeGreaterThan(0);

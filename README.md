@@ -177,7 +177,7 @@ The three money figures: the previous holder gets their 0.1 SOL back plus half o
 
 **The activity log is the audit trail.** Every proposal, approval, refusal, execution, failure, expiry, supersession and detected outbid is one JSON line in `ACTIVITY_LOG_PATH` (default `./billboard-activity.jsonl`), written in append mode and flushed to disk before the tool returns. Fields: `ts`, `event`, `tool`, `reasoning`, `proposal_id`, `superseded_by`, `bid_sol`, `tx`, `error`, `billboard_before` and `billboard_after` (poster and amount). The secret key is never written; the log schema rejects unknown fields. The spend limiter reads this file to compute the rolling total, so deleting it resets the daily allowance. In write modes the server also subscribes to the account and logs `outbid_detected` when the poster moves away from your wallet.
 
-**The message is untrusted.** It is paid text from a stranger. `read_billboard` returns it between `UNTRUSTED PAID CONTENT` markers, the server never interprets it or follows anything in it, and `SKILL.md` tells the agent to do the same. Whatever the message says, the limits above hold.
+**The message is untrusted.** It is paid text from a stranger. `read_billboard` returns it between `UNTRUSTED PAID CONTENT` markers, the server never interprets it or follows anything in it, and `SKILL.md` tells the agent to do the same. Whatever the message says, the limits above hold. [`docs/INJECTION.md`](docs/INJECTION.md) sets out what the server refuses in code, what is only advice and what is not defended, with a transcript you can reproduce with `BILLBOARD_SANDBOX=true BILLBOARD_SANDBOX_SCENARIO=adversarial`.
 
 ## Configuration
 

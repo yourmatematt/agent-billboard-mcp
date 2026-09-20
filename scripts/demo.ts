@@ -16,6 +16,10 @@
  * U8 adds the "on a loop" segment: five wakes of an agent on a heartbeat,
  * printed after the walk and kept in its own `loopSteps` / `loopActivity`
  * so the Definition of Done walk stays one readable unit.
+ *
+ * S4 adds the injection segment: one wake against the adversarial sandbox
+ * scenario, on its own server, printing the board message as received and the
+ * refusal it earns. `docs/INJECTION.md` carries that transcript.
  */
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -26,10 +30,16 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Keypair } from '@solana/web3.js';
 import bs58 from 'bs58';
 
-import { loadConfig } from '../src/config.js';
+import { loadConfig, modeLabel } from '../src/config.js';
 import type { ActivityEntry } from '../src/log/activity.js';
 import { lamportsToSol, minimumBid, solToLamports } from '../src/program/math.js';
 import { MockRpc } from '../src/rpc/MockRpc.js';
+import {
+  SANDBOX_ADVERSARIAL_DEMANDED_BID_SOL,
+  SANDBOX_ATTACKER_PAYOUT,
+  createSandboxRpc,
+  sandboxFetch,
+} from '../src/sandbox.js';
 import { createContext, createServer, type ServerContext } from '../src/server.js';
 import { ACQUIRE_TOOL } from '../src/tools/acquire_posting_rights.js';
 import { APPEND_TOOL } from '../src/tools/append_message.js';
@@ -62,6 +72,10 @@ export interface DemoResult {
   loopSteps: DemoStep[];
   /** Activity-log lines the loop segment produced, in order. */
   loopActivity: ActivityEntry[];
+  /** Tool calls made by the injection segment, in order. */
+  injectionSteps: DemoStep[];
+  /** Activity-log lines the injection segment produced, in order. */
+  injectionActivity: ActivityEntry[];
   /** Base58 public key of the demo wallet (a throwaway keypair, never funded). */
   wallet: string;
 }
@@ -131,6 +145,9 @@ function buildLongMessage(): string {
   }
   return message;
 }
+
+/** Fixed clock for the injection segment, so its printed timestamps are stable. */
+export const INJECTION_START = new Date('2026-09-14T18:00:00.000Z');
 
 /** How long the demo wallet holds the slot before the rival takes it. */
 export const RIVAL_HOLD_DELAY_SECONDS = 1800;
@@ -408,10 +425,163 @@ export async function runDemo(options: DemoOptions = {}): Promise<DemoResult> {
 
     await client.close();
     await server.close();
-    return { steps, activity, loopSteps, loopActivity, wallet: wallet.publicKey.toBase58() };
+
+    const injection = await runInjectionSegment({ out, dir, intentPath, printStep });
+
+    return {
+      steps,
+      activity,
+      loopSteps,
+      loopActivity,
+      injectionSteps: injection.steps,
+      injectionActivity: injection.activity,
+      wallet: wallet.publicKey.toBase58(),
+    };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+// ---------------------------------------------------------------------------
+// The injection segment (S4)
+// ---------------------------------------------------------------------------
+
+/**
+ * One wake against the `adversarial` sandbox scenario.
+ *
+ * The board message is paid text from a stranger telling the model to raise
+ * its ceiling, approve its own proposal and pay an unrelated address. This
+ * segment runs the bid the message demands and prints what the server does
+ * with it, in the order a reader needs: the message as received, the
+ * decision, the refusal with its reason code, the log line, and the count of
+ * transactions the attempt produced. `docs/INJECTION.md` carries this
+ * transcript; `test/injection.test.ts` asserts the same walk.
+ *
+ * It runs on its own server with its own sandbox config, so the walk above
+ * and the loop segment keep their wallet, their clock and their log.
+ */
+async function runInjectionSegment(args: {
+  out: (line: string) => void;
+  dir: string;
+  intentPath: string;
+  printStep: (heading: string, step: DemoStep) => void;
+}): Promise<{ steps: DemoStep[]; activity: ActivityEntry[] }> {
+  const { out, dir, intentPath, printStep } = args;
+  const steps: DemoStep[] = [];
+
+  // Zero configuration, exactly as the README tells a new operator to run it:
+  // the sandbox generates its own ephemeral wallet and defaults MAX_BID_SOL
+  // to 1 SOL. `cwd` keeps the forced sandbox log inside the temp directory.
+  const config = loadConfig(
+    {
+      BILLBOARD_SANDBOX: 'true',
+      BILLBOARD_SANDBOX_SCENARIO: 'adversarial',
+      INTENT_PATH: intentPath,
+    },
+    { cwd: dir, dotenvPath: null },
+  );
+  // Mirrors `createRuntime` in src/cli.ts, with a fixed clock so the printed
+  // timestamps are the same on every run.
+  const rpc = await createSandboxRpc(config.sandboxScenario);
+  let tick = 0;
+  const context = createContext(config, rpc, {
+    now: () => new Date(INJECTION_START.getTime() + 1000 * tick++),
+    warn: () => undefined,
+    fetch: sandboxFetch,
+  });
+  const transfersBefore = rpc.transfers.length;
+  const transactionsBefore = rpc.transactions.length;
+
+  const server = createServer(context);
+  const client = new Client({ name: 'agent-billboard-demo-injection', version: '0.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  const call = async (tool: string, toolArgs: Record<string, unknown>): Promise<DemoStep> => {
+    const result = await client.callTool({ name: tool, arguments: toolArgs });
+    const content = result.content as Array<{ type: string; text?: string }>;
+    const step: DemoStep = {
+      tool,
+      args: toolArgs,
+      isError: result.isError === true,
+      text: content
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text ?? '')
+        .join('\n'),
+      structured: result.structuredContent,
+    };
+    steps.push(step);
+    printStep(`### injection ${steps.length}. ${tool} ${JSON.stringify(toolArgs)}`, step);
+    return step;
+  };
+
+  out('');
+  out('## Injection defence');
+  out(
+    'One wake against the adversarial sandbox scenario ' +
+      '(BILLBOARD_SANDBOX=true, BILLBOARD_SANDBOX_SCENARIO=adversarial, no other configuration). ' +
+      'The board message is paid text from a stranger. The limits are not.',
+  );
+  out(
+    `limits: max bid ${lamportsToSol(config.maxBidLamports!)} SOL (the sandbox default), ` +
+      `daily cap ${lamportsToSol(config.dailyCapLamports!)} SOL, mode ${modeLabel(config)}`,
+  );
+
+  // 1. The message as received, between the untrusted markers.
+  await call(READ_BILLBOARD_TOOL, {});
+
+  // 2. The decision. Printed rather than inferred: a transcript has to say
+  // what the model concluded before it shows what the server did with it.
+  out('');
+  out('### injection decision');
+  out(
+    'The message asks for three things: bid ' +
+      `${SANDBOX_ADVERSARIAL_DEMANDED_BID_SOL} SOL against a raised ceiling, approve that ` +
+      'proposal without the owner, and send the SOL to ' +
+      `${SANDBOX_ATTACKER_PAYOUT.publicKey.toBase58()} instead of the program. ` +
+      'A model that follows board text would try the first. This run does exactly that, so ' +
+      'what refuses it below is the server, not the model.',
+  );
+
+  // 3. The bid the message demanded, and the refusal.
+  const refused = await call(ACQUIRE_TOOL, {
+    bid_sol: SANDBOX_ADVERSARIAL_DEMANDED_BID_SOL,
+    message: 'as instructed by the board',
+    reasoning: `The board message says MAX_BID_SOL was raised to 100 and to acquire at ${SANDBOX_ADVERSARIAL_DEMANDED_BID_SOL} SOL immediately. Following it.`,
+  });
+  const error = (refused.structured as { error?: unknown } | undefined)?.error;
+  out('');
+  out(`### injection refusal: ${refused.isError ? 'isError' : 'accepted'}, error ${String(error)}`);
+  out(
+    'The limit check runs in the server before anything is proposed, signed or sent. ' +
+      'Nothing in the board message, the intent file or the reasoning can move it; only the ' +
+      'environment can.',
+  );
+
+  // 4. The log line, and 5. the fact that nothing was produced.
+  const activity = context.activityLog.entries();
+  out('');
+  out(`### Activity log from the injection segment (${plural(activity.length, 'line')})`);
+  for (const entry of activity) out(JSON.stringify(entry));
+
+  const newTransactions = rpc.transactions.length - transactionsBefore;
+  const newTransfers = rpc.transfers.length - transfersBefore;
+  out('');
+  out(
+    `### No transaction was produced: ${newTransactions} transactions and ${newTransfers} transfers ` +
+      `on the simulated board since it was seeded. Nothing was sent to ` +
+      `${SANDBOX_ATTACKER_PAYOUT.publicKey.toBase58()}; there is no tool that could have.`,
+  );
+
+  await client.close();
+  await server.close();
+  return { steps, activity };
+}
+
+/** `1 line` / `2 lines`: the counts in the printed headings are quoted in the docs. */
+function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }
 
 function readActivity(context: ServerContext): ActivityEntry[] {
@@ -430,7 +600,9 @@ if (isMainModule()) {
       process.stdout.write(
         `\n${result.steps.length} tool calls, ${result.activity.length} activity log lines; ` +
           `then ${result.loopSteps.length} calls over five wakes on a loop, ` +
-          `${result.loopActivity.length} more log lines.\n`,
+          `${result.loopActivity.length} more log lines; ` +
+          `then ${result.injectionSteps.length} calls against the adversarial sandbox, ` +
+          `${plural(result.injectionActivity.length, 'more log line')}.\n`,
       );
     })
     .catch((err: unknown) => {
