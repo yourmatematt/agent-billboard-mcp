@@ -13,6 +13,7 @@ import { solToLamports } from '../../src/program/math.js';
 import { MockRpc } from '../../src/rpc/MockRpc.js';
 import { createContext, createServer, type ServerContext } from '../../src/server.js';
 import {
+  EPHEMERAL_WALLET_LABEL,
   READ_BILLBOARD_TOOL,
   UNTRUSTED_BANNER,
   UNTRUSTED_END,
@@ -115,6 +116,7 @@ describe('read_billboard in read-only mode', () => {
       message_bytes: 5,
       you_are_poster: false,
       operator: {
+        wallet: null,
         intent: null,
         limits: {
           max_bid_sol: null,
@@ -140,6 +142,7 @@ describe('read_billboard in read-only mode', () => {
     expect(lines[bannerAt + 2]).toBe(UNTRUSTED_END);
     expect(lines[0]).toContain('minimum bid 0.101 SOL');
     expect(lines[0]).toContain('You are not the poster.');
+    expect(lines[bannerAt - 1]).toBe('Your wallet: none (read-only: no keypair configured)');
     // The trailing JSON is parseable and does not repeat the message outside the markers.
     const json = JSON.parse(lines.slice(bannerAt + 3).join('\n')) as ReadBillboardOutput;
     expect(json.poster).toBe(them.publicKey.toBase58());
@@ -215,6 +218,31 @@ describe('read_billboard with a keypair and limits', () => {
     ({ structured } = await callRead(client));
     expect(structured!.operator.limits.spent_last_24h_sol).toBe('0.15');
     expect(structured!.operator.limits.remaining_today_sol).toBe('0.35');
+  });
+
+  it('names the configured wallet in operator.wallet and in the text block', async () => {
+    const { client } = await connect(makeContext(seeded(), writeEnv));
+    const { structured, text } = await callRead(client);
+    expect(structured!.operator.wallet).toBe(us.publicKey.toBase58());
+    expect(structured!.sandbox).toBe(false);
+    const lines = text.split('\n');
+    expect(lines).toContain(`Your wallet: ${us.publicKey.toBase58()}`);
+    // The line sits above the untrusted block, never inside it.
+    expect(lines.indexOf(`Your wallet: ${us.publicKey.toBase58()}`)).toBe(
+      lines.indexOf(UNTRUSTED_BANNER) - 1,
+    );
+    expect(text).not.toContain(EPHEMERAL_WALLET_LABEL);
+  });
+
+  it('shows the sandbox wallet as the ephemeral key, labelled as in the banner', async () => {
+    const context = makeContext(seeded(), { BILLBOARD_SANDBOX: 'true' });
+    const key = context.config.keypair!.publicKey.toBase58();
+    const { client } = await connect(context);
+    const { structured, text } = await callRead(client);
+    expect(structured!.sandbox).toBe(true);
+    expect(structured!.operator.wallet).toBe(key);
+    expect(text.split('\n')).toContain(`Your wallet: ${key} ${EPHEMERAL_WALLET_LABEL}`);
+    expect(EPHEMERAL_WALLET_LABEL).toBe('(ephemeral, generated at start-up, never funded)');
   });
 
   it('reports auto_bid true under AUTO_BID=true', async () => {

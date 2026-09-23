@@ -9,6 +9,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { PublicKey } from '@solana/web3.js';
 import { z } from 'zod';
 
 import {
@@ -43,6 +44,11 @@ const flipShape = z.object({
     .nullable()
     .describe('ISO 8601 time the acquire landed, or null when the block time is unknown.'),
   tx: z.string().describe('Transaction signature of the acquire.'),
+  is_you: z
+    .boolean()
+    .describe(
+      'True when the wallet you act for made this acquire. Always false in read-only mode.',
+    ),
   held_for_seconds: z
     .number()
     .int()
@@ -100,13 +106,16 @@ export async function getFlipHistory(
     fetch: context.fetch,
     warn: context.warn,
   });
-  return shapeHistory(history, fetchedAt, context.config.sandbox);
+  const wallet = context.config.keypair?.publicKey ?? null;
+  return shapeHistory(history, fetchedAt, context.config.sandbox, wallet);
 }
 
+/** `wallet` is the configured wallet, or null in read-only mode (every `is_you` is then false). */
 export function shapeHistory(
   history: FlipHistory,
   fetchedAt: Date,
   sandbox: boolean,
+  wallet: PublicKey | null,
 ): GetFlipHistoryOutput {
   return {
     flips: history.flips.map((flip) => ({
@@ -114,6 +123,7 @@ export function shapeHistory(
       amount_sol: lamportsToSol(flip.amount),
       timestamp: flip.timestamp === null ? null : new Date(flip.timestamp * 1000).toISOString(),
       tx: flip.tx,
+      is_you: wallet !== null && flip.poster.equals(wallet),
       held_for_seconds: flip.heldForSeconds,
     })),
     summary: {
@@ -149,8 +159,9 @@ export function formatFlipHistoryText(output: GetFlipHistoryOutput): string {
       flip.held_for_seconds === null
         ? 'still holding'
         : `held ${describeSeconds(flip.held_for_seconds)}`;
+    const you = flip.is_you ? '  (you)' : '';
     lines.push(
-      `- ${flip.timestamp ?? 'time unknown'}  ${flip.poster}  ${flip.amount_sol} SOL  ${held}`,
+      `- ${flip.timestamp ?? 'time unknown'}  ${flip.poster}  ${flip.amount_sol} SOL  ${held}${you}`,
     );
   }
   lines.push(JSON.stringify(output, null, 2));

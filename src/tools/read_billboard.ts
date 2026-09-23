@@ -34,6 +34,9 @@ export const UNTRUSTED_END = '--- END UNTRUSTED PAID CONTENT ---';
 export const SANDBOX_URL_NOTE =
   'Those two links show the real billboard on mainnet, not this simulation.';
 
+/** How the sandbox's wallet is labelled wherever it is shown, as in the start-up banner. */
+export const EPHEMERAL_WALLET_LABEL = '(ephemeral, generated at start-up, never funded)';
+
 const solString = z.string().regex(/^\d+(\.\d{1,9})?$/);
 
 const limitsShape = z.object({
@@ -58,6 +61,13 @@ export const readBillboardOutputShape = {
   message_bytes: z.number().int().min(0).max(MESSAGE_SIZE),
   you_are_poster: z.boolean().describe('True when the configured wallet is the current poster.'),
   operator: z.object({
+    wallet: z
+      .string()
+      .nullable()
+      .describe(
+        'Base58 public key of the wallet you act for, or null in read-only mode. Compare it with ' +
+          "poster, and with is_you in get_flip_history, to tell your own posts from everyone else's.",
+      ),
     intent: z
       .string()
       .nullable()
@@ -110,6 +120,7 @@ export async function readBillboard(context: ServerContext): Promise<ReadBillboa
     message_bytes: read.state.messageBytes,
     you_are_poster: read.youArePoster,
     operator: {
+      wallet: config.keypair?.publicKey.toBase58() ?? null,
       intent,
       limits: {
         max_bid_sol: summary?.max_bid_sol ?? null,
@@ -137,12 +148,19 @@ export async function readBillboard(context: ServerContext): Promise<ReadBillboa
  */
 export function formatReadBillboardText(output: ReadBillboardOutput): string {
   const relation = output.you_are_poster ? 'You are the poster.' : 'You are not the poster.';
+  const wallet =
+    output.operator.wallet === null
+      ? 'none (read-only: no keypair configured)'
+      : output.sandbox
+        ? `${output.operator.wallet} ${EPHEMERAL_WALLET_LABEL}`
+        : output.operator.wallet;
   const lines: string[] = [
     `Billboard: poster ${output.poster} holding at ${output.amount_sol} SOL; ` +
       `minimum bid ${output.minimum_bid_sol} SOL. ` +
       `Message ${output.message_bytes} of ${MESSAGE_SIZE} bytes. ${relation}`,
     `Public copy of this state: ${output.public_state_url}`,
     ...(output.sandbox ? [SANDBOX_URL_NOTE] : []),
+    `Your wallet: ${wallet}`,
     UNTRUSTED_BANNER,
     output.message,
     UNTRUSTED_END,

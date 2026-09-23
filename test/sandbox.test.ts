@@ -42,7 +42,7 @@ import {
 import { createServer } from '../src/server.js';
 import { ACQUIRE_TOOL } from '../src/tools/acquire_posting_rights.js';
 import { APPROVE_TOOL } from '../src/tools/approve_proposal.js';
-import { getFlipHistory } from '../src/tools/get_flip_history.js';
+import { GET_FLIP_HISTORY_TOOL, getFlipHistory } from '../src/tools/get_flip_history.js';
 import { READ_BILLBOARD_TOOL, readBillboard } from '../src/tools/read_billboard.js';
 
 let dir: string;
@@ -274,6 +274,7 @@ async function rehearse(): Promise<Walk> {
 
   await call('read after outbid', READ_BILLBOARD_TOOL, {});
   await call('over-limit bid', ACQUIRE_TOOL, { bid_sol: OVER_LIMIT_BID_SOL, reasoning: WHY });
+  await call('history', GET_FLIP_HISTORY_TOOL, { limit: 10 });
 
   return {
     calls,
@@ -342,6 +343,28 @@ describe('the rehearsal walk, with no configuration but BILLBOARD_SANDBOX', () =
     expect(read['you_are_poster']).toBe(true);
     expect(read['amount_sol']).toBe('0.101');
     expect(read['message']).toBe(REHEARSAL_MESSAGE);
+  });
+
+  it('every read names the ephemeral wallet as operator.wallet, labelled in the text', () => {
+    const reads = walk.calls.filter((c) => c.step.startsWith('read'));
+    expect(reads).toHaveLength(3);
+    for (const { step, structured, text } of reads) {
+      expect((structured['operator'] as { wallet: unknown }).wallet, step).toBe(walk.wallet);
+      expect(text, step).toContain(
+        `Your wallet: ${walk.wallet} (ephemeral, generated at start-up, never funded)`,
+      );
+    }
+  });
+
+  it('the history marks the agent own acquire is_you and the outside one not', () => {
+    const history = walk.calls.find((c) => c.step === 'history')!;
+    expect(history.isError).toBe(false);
+    const flips = history.structured['flips'] as Array<{ poster: string; is_you: boolean }>;
+    const ours = flips.filter((f) => f.poster === walk.wallet);
+    expect(ours).toHaveLength(1);
+    expect(ours[0]!.is_you).toBe(true);
+    expect(flips.filter((f) => f.poster !== walk.wallet).every((f) => !f.is_you)).toBe(true);
+    expect(flips[0]!.is_you).toBe(false);
   });
 
   it('an outside acquire displaces the agent and the read says so', () => {

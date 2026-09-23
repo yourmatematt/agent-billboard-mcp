@@ -123,12 +123,14 @@ describe('get_flip_history', () => {
     expect(out.flips).toHaveLength(2);
     expect(out.flips[0]).toMatchObject({
       poster: third.publicKey.toBase58(),
+      is_you: false,
       amount_sol: '0.2',
       held_for_seconds: null,
       tx: rpc.transactions[1]!.signature,
     });
     expect(out.flips[1]).toMatchObject({
       poster: us.publicKey.toBase58(),
+      is_you: true,
       amount_sol: '0.101',
       held_for_seconds: 3_601,
       tx: rpc.transactions[0]!.signature,
@@ -146,6 +148,8 @@ describe('get_flip_history', () => {
     expect(text).toMatch(/2 flips, newest first, from on-chain Acquired events/);
     expect(text).toMatch(/there is no read count/);
     expect(text).toContain(third.publicKey.toBase58());
+    expect(text).toContain(`${us.publicKey.toBase58()}  0.101 SOL  held 1.0 h  (you)`);
+    expect(text.split('(you)').length - 1).toBe(1);
     expect(text).not.toMatch(/read_count|reads:/i);
   });
 
@@ -176,6 +180,34 @@ describe('get_flip_history', () => {
       average_hold_seconds: null,
       current_hold_seconds: null,
     });
+  });
+
+  it('marks every flip is_you false in read-only mode, even for our own wallet', async () => {
+    const rpc = new MockRpc({ poster: rival.publicKey, amount: sol('0.1') });
+    await rpc.acquireAs(us, sol('0.101'));
+    await rpc.acquireAs(third, sol('0.2'));
+    const { client } = await connect(makeContext(rpc));
+    const { structured, text } = await callHistory(client);
+    expect(structured!.flips).toHaveLength(2);
+    expect(structured!.flips.map((f) => f.is_you)).toEqual([false, false]);
+    expect(text).not.toContain('(you)');
+  });
+
+  it("marks the ephemeral sandbox wallet's own flips is_you true", async () => {
+    const rpc = new MockRpc({ poster: rival.publicKey, amount: sol('0.1') });
+    const context = makeContext(rpc, { BILLBOARD_SANDBOX: 'true' });
+    const ephemeral = context.config.keypair!;
+    await rpc.acquireAs(ephemeral, sol('0.101'));
+    await rpc.acquireAs(third, sol('0.2'));
+    await rpc.acquireAs(ephemeral, sol('0.3'));
+    const { client } = await connect(context);
+    const { structured } = await callHistory(client);
+    expect(structured!.sandbox).toBe(true);
+    expect(structured!.flips.map((f) => [f.poster, f.is_you])).toEqual([
+      [ephemeral.publicKey.toBase58(), true],
+      [third.publicKey.toBase58(), false],
+      [ephemeral.publicKey.toBase58(), true],
+    ]);
   });
 
   it('honours limit and rejects out-of-range values', async () => {
