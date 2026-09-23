@@ -12,6 +12,12 @@
  *     (a read, a subscription event, or a caller's `observe()` after its own
  *     transaction). Outbid detection compares each new observation against
  *     it, so the same flip is logged once whichever route reported it first.
+ *   - both of the above are saved to the optional `ReaderStateStore` after
+ *     every change and seeded from it at construction, so a fresh process
+ *     (a heartbeat wake) compares against what the previous one saw. Without
+ *     a store, or with no usable file, the first read is a first read:
+ *     `firstRead` and `changedSinceLastRead` are both true, because an agent
+ *     that has never looked should decide.
  *   - the subscription itself, which is optional. `subscribe()` returns
  *     false and logs a warning when the RPC cannot subscribe; reads keep
  *     working and outbid detection then happens on the next `read()`.
@@ -26,6 +32,7 @@ import type { ActivityLog } from '../log/activity.js';
 import { BILLBOARD_ADDRESS, decodeBillboard, type BillboardState } from '../program/layout.js';
 import { lamportsToSol } from '../program/math.js';
 import type { Rpc, Unsubscribe } from '../rpc/Rpc.js';
+import type { ReaderStateStore } from './state.js';
 
 export class ReaderError extends Error {
   override readonly name = 'ReaderError';
@@ -36,8 +43,13 @@ export class ReaderError extends Error {
 
 export interface BillboardRead {
   state: BillboardState;
-  /** True when poster, amount, creator or message differ from the previous `read()`. */
+  /**
+   * True when poster, amount, creator or message differ from the previous
+   * `read()`, and always true on a first read.
+   */
   changedSinceLastRead: boolean;
+  /** True when there was no previous `read()`, in this process or a saved one. */
+  firstRead: boolean;
   /** True when the configured wallet is the current poster. Always false without a wallet. */
   youArePoster: boolean;
   fetchedAt: Date;
@@ -54,6 +66,11 @@ export interface BillboardReaderOptions {
   now?: () => Date;
   /** Where warnings go. Default: stderr. */
   warn?: (message: string) => void;
+  /**
+   * Where `lastSeen` and `current` persist between processes. Null or absent
+   * keeps them in memory only (the sandbox, and most unit tests).
+   */
+  store?: ReaderStateStore | null;
 }
 
 /** Tool name recorded on `outbid_detected` entries. */
@@ -66,6 +83,7 @@ export class BillboardReader {
   private readonly log: ActivityLog | null;
   private readonly now: () => Date;
   private readonly warn: (message: string) => void;
+  private readonly store: ReaderStateStore | null;
   private lastSeenState: BillboardState | null = null;
   private lastObservedState: BillboardState | null = null;
   private unsubscribeFn: Unsubscribe | null = null;
@@ -77,6 +95,12 @@ export class BillboardReader {
     this.address = options.address ?? BILLBOARD_ADDRESS;
     this.now = options.now ?? (() => new Date());
     this.warn = options.warn ?? ((message) => process.stderr.write(`${message}\n`));
+    this.store = options.store ?? null;
+    const saved = this.store?.load() ?? null;
+    if (saved !== null) {
+      this.lastSeenState = saved.lastSeen;
+      this.lastObservedState = saved.lastObserved;
+    }
   }
 
   /** What the previous `read()` returned, or null before the first read. */
@@ -100,12 +124,15 @@ export class BillboardReader {
   async read(): Promise<BillboardRead> {
     const state = await this.peek();
     const fetchedAt = this.now();
+    const firstRead = this.lastSeenState === null;
     const changedSinceLastRead =
-      this.lastSeenState !== null && !statesEqual(this.lastSeenState, state);
+      this.lastSeenState === null || !statesEqual(this.lastSeenState, state);
     this.lastSeenState = state;
+    this.persist();
     return {
       state,
       changedSinceLastRead,
+      firstRead,
       youArePoster: this.isPoster(state),
       fetchedAt,
     };
@@ -143,6 +170,7 @@ export class BillboardReader {
   observe(state: BillboardState): void {
     const previous = this.lastObservedState;
     this.lastObservedState = state;
+    this.persist();
     if (previous === null) return;
     if (this.isPoster(previous) && !this.isPoster(state)) {
       this.recordOutbid(previous, state);
@@ -180,6 +208,10 @@ export class BillboardReader {
       const message = err instanceof Error ? err.message : String(err);
       this.warn(`billboard unsubscribe failed (${message})`);
     }
+  }
+
+  private persist(): void {
+    this.store?.save({ lastSeen: this.lastSeenState, lastObserved: this.lastObservedState });
   }
 
   private isPoster(state: BillboardState): boolean {

@@ -125,7 +125,8 @@ describe('read_billboard in read-only mode', () => {
           read_only: true,
         },
       },
-      changed_since_last_read: false,
+      changed_since_last_read: true,
+      first_read: true,
       fetched_at: T0.toISOString(),
       public_state_url: 'https://i.xn--5t8h.ws/billboard.json',
       site_url: 'https://xn--5t8h.ws/',
@@ -243,13 +244,16 @@ describe('read_billboard with a keypair and limits', () => {
 
     let { structured, text } = await callRead(client);
     expect(structured!.you_are_poster).toBe(true);
-    expect(structured!.changed_since_last_read).toBe(false);
+    // A first read has nothing to compare against, so it reports a change.
+    expect(structured!.first_read).toBe(true);
+    expect(structured!.changed_since_last_read).toBe(true);
     expect(text).toContain('You are the poster.');
 
     await rpc.acquireAs(them, sol('0.2'), 'theirs now');
 
     ({ structured } = await callRead(client));
     expect(structured!.you_are_poster).toBe(false);
+    expect(structured!.first_read).toBe(false);
     expect(structured!.changed_since_last_read).toBe(true);
     expect(structured!.poster).toBe(them.publicKey.toBase58());
     expect(structured!.amount_sol).toBe('0.2');

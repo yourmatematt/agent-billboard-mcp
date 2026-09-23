@@ -13,7 +13,7 @@
  *   - `DAILY_CAP_SOL` defaults to `MAX_BID_SOL`.
  *   - `BILLBOARD_SANDBOX=true` -> rehearsal mode: an ephemeral keypair is
  *     generated here, `BILLBOARD_KEYPAIR` is never read, the RPC variables and
- *     `ACTIVITY_LOG_PATH` are ignored with a warning each, and the limits
+ *     `ACTIVITY_LOG_PATH` and `STATE_PATH` are ignored with a warning each, and the limits
  *     default so the sandbox needs no configuration at all.
  *   - Error messages never contain the secret key, in any encoding.
  *   - Nothing here writes to stdout (that channel belongs to MCP). `.env` is
@@ -39,6 +39,8 @@ export const DEFAULT_INTENT_PATH = './intent.md';
 export const DEFAULT_ACTIVITY_LOG_PATH = './billboard-activity.jsonl';
 /** Where rehearsal entries go. Never the file that records real spending. */
 export const DEFAULT_SANDBOX_ACTIVITY_LOG_PATH = './billboard-sandbox-activity.jsonl';
+/** Where the reader remembers what the agent last saw, between processes. */
+export const DEFAULT_STATE_PATH = './billboard-state.json';
 /** `MAX_BID_SOL` when the sandbox is on and the operator set none. */
 export const DEFAULT_SANDBOX_MAX_BID_SOL = '1';
 
@@ -61,6 +63,7 @@ export const CONFIG_VARS = [
   'RPC_URL',
   'RPC_WS_URL',
   'ACTIVITY_LOG_PATH',
+  'STATE_PATH',
 ] as const;
 
 export type ConfigVar = (typeof CONFIG_VARS)[number];
@@ -104,6 +107,11 @@ export interface Config {
   readonly rpcWsUrl: string;
   /** Absolute path to the JSONL activity log. */
   readonly activityLogPath: string;
+  /**
+   * Absolute path to the reader state file, or null in the sandbox, whose
+   * simulated board resets every start and so never persists.
+   */
+  readonly statePath: string | null;
 }
 
 export class ConfigError extends Error {
@@ -252,6 +260,7 @@ const envSchema = z.object({
   RPC_URL: httpUrl('RPC_URL').default(DEFAULT_RPC_URL),
   RPC_WS_URL: wsUrl.optional(),
   ACTIVITY_LOG_PATH: nonEmptyPath('ACTIVITY_LOG_PATH').default(DEFAULT_ACTIVITY_LOG_PATH),
+  STATE_PATH: nonEmptyPath('STATE_PATH').default(DEFAULT_STATE_PATH),
 });
 
 // ---------------------------------------------------------------------------
@@ -463,6 +472,11 @@ const SANDBOX_IGNORED: ReadonlyArray<readonly [ConfigVar, string]> = [
     `BILLBOARD_SANDBOX is on, so ACTIVITY_LOG_PATH is ignored. Rehearsal entries go to ${DEFAULT_SANDBOX_ACTIVITY_LOG_PATH}, ` +
       'never to the file that records real spending.',
   ],
+  [
+    'STATE_PATH',
+    'BILLBOARD_SANDBOX is on, so STATE_PATH is ignored. The simulated board resets every start, ' +
+      'so the sandbox keeps reader state in memory and writes no state file.',
+  ],
 ];
 
 /** Picks the variables we care about and treats blank strings as unset. */
@@ -570,6 +584,7 @@ export function loadConfig(
       cwd,
       sandbox ? DEFAULT_SANDBOX_ACTIVITY_LOG_PATH : raw.ACTIVITY_LOG_PATH,
     ),
+    statePath: sandbox ? null : resolve(cwd, raw.STATE_PATH),
   };
 }
 
@@ -601,5 +616,6 @@ export function describeConfig(config: Config): Record<string, unknown> {
     rpc_url: config.rpcUrl,
     rpc_ws_url: config.rpcWsUrl,
     activity_log_path: config.activityLogPath,
+    state_path: config.statePath,
   };
 }

@@ -14,8 +14,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { BillboardReader } from './billboard/reader.js';
+import { ReaderStateStore } from './billboard/state.js';
 import type { Config } from './config.js';
 import { ActivityLog } from './log/activity.js';
+import { BILLBOARD_ADDRESS, PROGRAM_ID } from './program/layout.js';
 import { ProposalStore } from './proposals.js';
 import type { Rpc } from './rpc/Rpc.js';
 import { SpendLimits } from './spend/limits.js';
@@ -66,12 +68,21 @@ export function createContext(
   const now = options.now ?? (() => new Date());
   const warn = options.warn ?? ((message: string) => process.stderr.write(`${message}\n`));
   const activityLog = new ActivityLog(config.activityLogPath, { now, warn });
-  const reader = new BillboardReader(rpc, {
-    wallet: config.keypair?.publicKey ?? null,
-    activityLog,
-    now,
-    warn,
-  });
+  const wallet = config.keypair?.publicKey ?? null;
+  // The sandbox has no state path: its board resets every start.
+  const store =
+    config.statePath === null
+      ? null
+      : new ReaderStateStore(
+          config.statePath,
+          {
+            programId: PROGRAM_ID.toBase58(),
+            billboard: BILLBOARD_ADDRESS.toBase58(),
+            wallet: wallet?.toBase58() ?? null,
+          },
+          { now, warn },
+        );
+  const reader = new BillboardReader(rpc, { wallet, activityLog, now, warn, store });
   const limits =
     config.maxBidLamports !== null && config.dailyCapLamports !== null
       ? new SpendLimits(

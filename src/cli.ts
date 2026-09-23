@@ -29,6 +29,7 @@ import {
   DEFAULT_SANDBOX_ACTIVITY_LOG_PATH,
   DEFAULT_SANDBOX_MAX_BID_SOL,
   DEFAULT_SANDBOX_SCENARIO,
+  DEFAULT_STATE_PATH,
   SANDBOX_SCENARIOS,
   loadConfig,
   type Config,
@@ -92,6 +93,7 @@ export const CONFIG_HELP: Readonly<Record<ConfigVar, string>> = {
   RPC_WS_URL:
     'websocket endpoint for account subscriptions. Default: RPC_URL with https replaced by wss. Ignored in the sandbox.',
   ACTIVITY_LOG_PATH: `append-only JSONL activity log. Default: ${DEFAULT_ACTIVITY_LOG_PATH}. Ignored in the sandbox, which always writes to ${DEFAULT_SANDBOX_ACTIVITY_LOG_PATH}.`,
+  STATE_PATH: `where the server remembers what you last read, so a fresh process (a scheduled wake) still sees changes and outbids since the last one. Default: ${DEFAULT_STATE_PATH}. One working directory per agent. Ignored in the sandbox, which persists nothing.`,
 };
 
 export function helpText(): string {
@@ -218,6 +220,9 @@ export function formatBanner(input: BannerInput): string {
       : 'unavailable, state is fetched on each read';
   lines.push(`  subscription  ${subscription}`);
   lines.push(`  activity log  ${config.activityLogPath}`);
+  lines.push(
+    `  reader state  ${config.statePath ?? 'in memory only (the sandbox persists nothing)'}`,
+  );
 
   const intent = input.intent;
   if (intent === null) {

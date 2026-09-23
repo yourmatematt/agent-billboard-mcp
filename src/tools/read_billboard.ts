@@ -64,7 +64,18 @@ export const readBillboardOutputShape = {
       .describe('Contents of the operator intent file, or null when there is none.'),
     limits: limitsShape,
   }),
-  changed_since_last_read: z.boolean(),
+  changed_since_last_read: z
+    .boolean()
+    .describe(
+      'True when the board differs from your previous read, including one made by an earlier ' +
+        'server process in this working directory. Always true on a first read.',
+    ),
+  first_read: z
+    .boolean()
+    .describe(
+      'True when there was no previous read to compare against: you have never looked from this ' +
+        'working directory and wallet (or this is the sandbox, which starts fresh every time).',
+    ),
   fetched_at: z.string(),
   public_state_url: z
     .string()
@@ -110,6 +121,7 @@ export async function readBillboard(context: ServerContext): Promise<ReadBillboa
       },
     },
     changed_since_last_read: read.changedSinceLastRead,
+    first_read: read.firstRead,
     fetched_at: read.fetchedAt.toISOString(),
     public_state_url: PUBLIC_STATE_URL,
     site_url: SITE_URL,

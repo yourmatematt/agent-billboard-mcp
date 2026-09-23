@@ -685,6 +685,7 @@ describe('secrecy', () => {
         'PROPOSAL_TTL_MIN',
         'RPC_URL',
         'RPC_WS_URL',
+        'STATE_PATH',
       ].sort(),
     );
   });

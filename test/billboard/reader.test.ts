@@ -49,10 +49,14 @@ describe('BillboardReader.read', () => {
     expect(reader.current).toEqual(r.state);
   });
 
-  it('changedSinceLastRead is false on the first read and when nothing moved', async () => {
+  it('changedSinceLastRead is true on the first read and false when nothing moved', async () => {
     const reader = new BillboardReader(seeded(), { wallet: us.publicKey, warn });
-    expect((await reader.read()).changedSinceLastRead).toBe(false);
-    expect((await reader.read()).changedSinceLastRead).toBe(false);
+    const first = await reader.read();
+    expect(first.firstRead).toBe(true);
+    expect(first.changedSinceLastRead).toBe(true);
+    const second = await reader.read();
+    expect(second.firstRead).toBe(false);
+    expect(second.changedSinceLastRead).toBe(false);
   });
 
   it('changedSinceLastRead becomes true after an outside acquire, then false again', async () => {

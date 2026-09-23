@@ -47,6 +47,14 @@ const BASE58_SIGNATURE_RE = /[1-9A-HJ-NP-Za-km-z]{64,88}/;
  * field this phase adds; if a walk produces anything else, the promise that
  * the real board's output is unchanged has been broken.
  */
+/**
+ * Top-level fields 0.4.0 adds, on the real board and in the sandbox alike.
+ * Named here so the check above stays a check: anything not listed still fails.
+ */
+const KEYS_ADDED_0_4_0: Readonly<Record<string, readonly string[]>> = {
+  [READ_BILLBOARD_TOOL]: ['first_read'],
+};
+
 const KEYS_0_2_0: Readonly<Record<string, readonly string[]>> = {
   [READ_BILLBOARD_TOOL]: [
     'poster',
@@ -300,12 +308,12 @@ describe('a real result is unchanged apart from sandbox: false', () => {
     }
   });
 
-  it('adds sandbox and nothing else to the 0.2.0 field set', () => {
+  it('adds sandbox and nothing else to the 0.2.0 field set (plus the named 0.4.0 fields)', () => {
     for (const { tool, structured } of calls) {
       const keys = Object.keys(structured!);
       expect(keys, tool).toContain('sandbox');
       const before = keys.filter((k) => k !== 'sandbox');
-      const allowed = KEYS_0_2_0[tool]!;
+      const allowed = [...KEYS_0_2_0[tool]!, ...(KEYS_ADDED_0_4_0[tool] ?? [])];
       expect(
         before.filter((k) => !allowed.includes(k)),
         tool,

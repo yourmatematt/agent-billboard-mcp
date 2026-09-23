@@ -8,7 +8,7 @@
  * memory except the activity log, and the only clock that matters is the
  * server's, which the test drives.
  *
- *   wake 1  board unchanged            -> nothing happens, nothing logged
+ *   wake 1  first look, then unchanged -> first_read, then nothing logged
  *   wake 2  a rival acquired           -> outbid_detected, then a proposal
  *   wake 3  +30 min, the owner said yes -> approved and executed
  *   wake 4  two appends drafted        -> the second supersedes the first
@@ -139,8 +139,8 @@ async function runHeartbeat(): Promise<Scenario> {
   // --- wake 1: nothing moved ------------------------------------------------
   const wake1First = await read();
   advance(5);
-  // The next beat with the board still unmoved looks the same, so the false
-  // above is not just the "no previous read" default.
+  // The first read has nothing to compare against, so it reports a change.
+  // The next beat with the board still unmoved is the one that says "quiet".
   const wake1Repeat = await read();
   const logAfterWake1 = context.activityLog.entries();
 
@@ -206,10 +206,12 @@ afterAll(async () => {
 });
 
 describe('an agent on a heartbeat, five wakes against MockRpc', () => {
-  it('wake 1: the board has not moved, so changed_since_last_read is false and nothing is logged', () => {
-    expect(scenario.wake1First.changed_since_last_read).toBe(false);
+  it('wake 1: a first read reports a change; the next, with the board unmoved, does not; nothing is logged', () => {
+    expect(scenario.wake1First.first_read).toBe(true);
+    expect(scenario.wake1First.changed_since_last_read).toBe(true);
     expect(scenario.wake1First.you_are_poster).toBe(true);
     expect(scenario.wake1First.amount_sol).toBe(OUR_SEED_BID);
+    expect(scenario.wake1Repeat.first_read).toBe(false);
     expect(scenario.wake1Repeat.changed_since_last_read).toBe(false);
     expect(scenario.wake1Repeat.poster).toBe(scenario.wallet);
     // Two reads, no writes: the log the next wake inherits is still empty.
