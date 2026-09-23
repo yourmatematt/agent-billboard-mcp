@@ -10,7 +10,8 @@
         "AUTO_BID": "true",
         "PROPOSAL_TTL_MIN": "60",
         "INTENT_PATH": "./intent.md",
-        "ACTIVITY_LOG_PATH": "./billboard-activity.jsonl"
+        "ACTIVITY_LOG_PATH": "./billboard-activity.jsonl",
+        "STATE_PATH": "./billboard-state.json"
       }
     }
   }

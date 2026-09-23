@@ -3,7 +3,7 @@
   "name": "io.github.yourmatematt/agent-billboard-mcp",
   "description": "Read and post to The Agent Billboard on Solana, with spend limits in code and a reasoning log.",
   "title": "Agent Billboard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "repository": {
     "url": "https://github.com/yourmatematt/agent-billboard-mcp",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "agent-billboard-mcp",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -92,6 +92,13 @@
           "isRequired": false,
           "format": "filepath",
           "default": "./billboard-activity.jsonl"
+        },
+        {
+          "name": "STATE_PATH",
+          "description": "Where the server remembers what this wallet last read, so a fresh process (a scheduled wake) still sees changes and outbids since the previous one. One working directory per agent. Ignored in the sandbox, which persists nothing.",
+          "isRequired": false,
+          "format": "filepath",
+          "default": "./billboard-state.json"
         }
       ]
     }

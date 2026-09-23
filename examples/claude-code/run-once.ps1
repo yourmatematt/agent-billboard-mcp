@@ -7,8 +7,10 @@
 
 $ErrorActionPreference = 'Stop'
 
-# The project directory: .mcp.json, intent.md, the keypair and the activity log
-# all live here, and the server resolves relative paths against it.
+# The project directory: .mcp.json, intent.md, the keypair, the activity log
+# and the reader state (billboard-state.json) all live here, and the server
+# resolves relative paths against it. The state file is what lets this wake see
+# whether the board changed since the last one, so keep one directory per agent.
 Set-Location -Path $PSScriptRoot
 
 $prompt = @'

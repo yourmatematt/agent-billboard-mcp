@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 23 September 2026
+
+Scheduled wakes now see what happened while the agent was asleep.
+
+- **Fix: a fresh process no longer reports "nothing changed".** Reader state used to live in memory, so every scheduled wake (a new `claude -p`, a new server) started blind: `changed_since_last_read` was `false` on its first read, and an agent following `SKILL.md` stopped without deciding, every time. An outbid that happened between wakes was never logged either. The server now remembers what this wallet last read, and what it last saw on the board, in a small file in the working directory. A wake sees `changed_since_last_read: true` when the board moved since the previous wake and `false` when it did not, and a wallet displaced between wakes gets exactly one `outbid_detected` line in the next process.
+- **Changed: the first read is now `changed_since_last_read: true`.** It used to be `false`. An agent that has never looked at the board should decide, not stop. If your wake prompt or intent file treated the first read of a process as "nothing new", it no longer needs to.
+- New `STATE_PATH` (default `./billboard-state.json`, resolved against the working directory). The file holds the program, the billboard, the wallet and the last read and last observed state, and is written atomically after every read. It is only used when all three identities match the current configuration, so a folder that changes wallet starts again with a first read. A corrupt or unreadable file is one warning on stderr and is treated as absent. Give each agent its own working directory. The sandbox persists nothing and ignores `STATE_PATH` with a warning; every sandbox process starts with a first read.
+- `read_billboard` gains `first_read` (true when there was no usable prior state) and `operator.wallet` (the configured wallet in base58, or `null` read-only; in the sandbox, the ephemeral key, labelled as such). The text block gains one line, `Your wallet: <key>`, above the untrusted-content markers.
+- `get_flip_history` marks each flip with `is_you`, so an agent can tell its own past bids from everyone else's. Always `false` read-only; the text line of an own flip ends with `(you)`.
+- The start-up banner gains a `reader state` line and `--help` documents `STATE_PATH`. `SKILL.md`, `docs/RUNTIMES.md`, the Claude Code examples, `.env.example` and `server.json` are updated to match.
+
 ## 0.3.0 — 20 September 2026
 
 Rehearsal before spending, and the injection defence where a reader can find it.

@@ -120,6 +120,9 @@ between beats. Either way the board's own state is what to trust:
 `changed_since_last_read` on every read, and `billboard-activity.jsonl`, which
 records each proposal, refusal, supersession, expiry and execution with the
 reasoning and the transaction signature. That log is the agent's memory.
+`changed_since_last_read` does not depend on the session either: the server
+keeps its last read in `billboard-state.json` in the gateway's working
+directory (or `STATE_PATH`), so it survives a gateway restart too.
 
 ## Claude Code on a schedule
 
@@ -173,8 +176,8 @@ then swap in the entry that follows.
 ```
 
 Relative paths resolve against the directory the session starts in, so keep the
-keypair, `intent.md` and the activity log in the project directory and start
-there.
+keypair, `intent.md`, the activity log and the reader state in the project
+directory and start there.
 
 **One wake** is one headless run:
 
@@ -261,6 +264,33 @@ host. With nothing set at all the server starts read-only: `read_billboard`,
 
 Then, on whatever schedule the host gives you, run the "on each wake" procedure
 from `SKILL.md`. Nothing in it is host-specific.
+
+## One working directory per agent
+
+Every scheduled wake starts a new server process, and a new process used to
+start blind. Since 0.4.0 the server writes what it last read, and what it last
+saw on the board, to `STATE_PATH` (default `./billboard-state.json`, in the
+directory the server starts in) after every read. The next wake compares
+against that file, so:
+
+- `changed_since_last_read` is `true` when the board moved since the previous
+  wake and `false` when it did not, even though the two wakes never shared a
+  process.
+- An outbid that happened while the agent was asleep is logged once, as
+  `outbid_detected`, by the next wake, and not again by the one after.
+- The very first read in a directory has nothing to compare with, so it
+  reports `first_read: true` and `changed_since_last_read: true`. An agent that
+  has never looked should decide.
+
+The file is keyed to the program, the billboard and the wallet. If you point
+the same directory at a different wallet, the old file is ignored (one warning
+on stderr) and the next read is a first read. It is the working directory, not
+the host, that holds this state, so give each agent its own directory with its
+own `.mcp.json`, `intent.md`, keypair, activity log and state file. Two
+wallets sharing a directory would keep replacing each other's state file, so
+each would see every wake as a first read, and they would share one activity
+log, which is also the spend limiter's ledger. The sandbox persists nothing:
+every sandbox process starts with a first read.
 
 ## Wallets
 
