@@ -12,7 +12,7 @@
  * server → connect stdio → subscribe to account changes (write modes) →
  * start the proposal sweeper (propose mode) → print the banner.
  *
- * The sandbox is a choice made here and nowhere else: `createRuntime` hands
+ * The sandbox is a choice made in one place: `createRuntime` (runtime.ts) hands
  * the server a seeded `MockRpc` instead of a `SolanaRpc`. The server core and
  * the tools never learn which one they have.
  */
@@ -44,10 +44,9 @@ import {
   MAX_PROPOSAL_TTL_MIN,
   MIN_PROPOSAL_TTL_MIN,
 } from './proposals.js';
-import type { Rpc } from './rpc/Rpc.js';
-import { SolanaRpc } from './rpc/SolanaRpc.js';
-import { SANDBOX_SEEDS, createSandboxRpc, sandboxFetch } from './sandbox.js';
-import { createContext, createServer, type ServerContext } from './server.js';
+import { createRuntime } from './runtime.js';
+import { SANDBOX_SEEDS } from './sandbox.js';
+import { createServer } from './server.js';
 import { PACKAGE_NAME, PACKAGE_VERSION } from './version.js';
 
 // ---------------------------------------------------------------------------
@@ -527,23 +526,8 @@ const stderr = (line: string): void => {
 /** How long shutdown waits for the event loop to drain before forcing exit. */
 const SHUTDOWN_GRACE_MS = 5000;
 
-/**
- * Builds the RPC the mode calls for and the context around it.
- *
- * This is the only place the sandbox is decided. In the sandbox it returns a
- * `MockRpc` seeded from the scenario and a context whose `fetch` refuses, so
- * a rehearsal makes no outbound request even when `HISTORY_URL` is set;
- * `SolanaRpc` is never constructed. Exported so tests can assert exactly that
- * without starting a transport.
- */
-export async function createRuntime(config: Config): Promise<{ rpc: Rpc; context: ServerContext }> {
-  if (config.sandbox) {
-    const rpc = await createSandboxRpc(config.sandboxScenario);
-    return { rpc, context: createContext(config, rpc, { fetch: sandboxFetch }) };
-  }
-  const rpc = new SolanaRpc({ rpcUrl: config.rpcUrl, wsUrl: config.rpcWsUrl });
-  return { rpc, context: createContext(config, rpc) };
-}
+/** Lives in `runtime.ts` so the `init` rehearsal can use it too; re-exported for existing imports. */
+export { createRuntime };
 
 async function serve(): Promise<void> {
   // Refuse to start if the constants and the derivation disagree: every

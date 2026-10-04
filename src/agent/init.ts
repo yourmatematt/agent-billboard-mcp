@@ -63,6 +63,7 @@ import {
   toJsonFile,
   type AgentPlatform,
 } from './settings.js';
+import { rehearse as sandboxRehearsal } from './rehearse.js';
 import { WalletError, createWallet, importWallet, type WalletInfo } from './wallet.js';
 
 export class InitError extends Error {
@@ -145,7 +146,7 @@ export interface InitDeps {
   claudeMdExists?: (path: string) => boolean;
   /** Injected for tests; passed to `createWallet` (POSIX only). */
   chmod?: (path: string, mode: number) => void;
-  /** The sandbox rehearsal. Absent: `init` says it was not run. */
+  /** The sandbox rehearsal. Default: the in-process walk in rehearse.ts. */
   rehearse?: Rehearse;
 }
 
@@ -288,7 +289,10 @@ function missingFlags(args: InitArgs, withDefaults: boolean): string[] {
 // init
 // ---------------------------------------------------------------------------
 
-/** Runs `init`. Returns the exit code: 0 done, 2 refused (nothing written). */
+/**
+ * Runs `init`. Returns the exit code: 0 done, 1 the files are written but the
+ * rehearsal did not finish, 2 refused (nothing written).
+ */
 export async function runInit(args: InitArgs, deps: InitDeps = {}): Promise<number> {
   const io: InitIo = {
     input: deps.io?.input ?? process.stdin,
@@ -297,8 +301,7 @@ export async function runInit(args: InitArgs, deps: InitDeps = {}): Promise<numb
     writeErr: deps.io?.writeErr ?? ((text) => void process.stderr.write(text)),
   };
   try {
-    await init(args, deps, io);
-    return 0;
+    return await init(args, deps, io);
   } catch (err) {
     if (!(err instanceof InitError)) throw err;
     io.writeErr(`${PACKAGE_NAME}: init: ${err.message}\n`);
@@ -307,7 +310,7 @@ export async function runInit(args: InitArgs, deps: InitDeps = {}): Promise<numb
   }
 }
 
-async function init(args: InitArgs, deps: InitDeps, io: InitIo): Promise<void> {
+async function init(args: InitArgs, deps: InitDeps, io: InitIo): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
   const paths = agentPaths(args.dir, cwd);
   const line = (text = ''): void => io.write(`${text}\n`);
@@ -378,20 +381,24 @@ async function init(args: InitArgs, deps: InitDeps, io: InitIo): Promise<void> {
   }
   const wallet = writeFolder(paths, answers, imported, args, deps, cwd, line);
 
-  // 6. The rehearsal.
+  // 6. The rehearsal. A failure is reported, and the closing lines still print.
+  let rehearsed = true;
   if (args.skipRehearsal) {
     line('Rehearsal skipped (--skip-rehearsal).');
-  } else if (deps.rehearse === undefined) {
-    line('The sandbox rehearsal is not part of this build; skipped.');
   } else {
-    await deps.rehearse({
-      paths,
-      belief: answers.belief,
-      maxBidSol: answers.maxBid,
-      dailyCapSol: answers.dailyCap,
-      mode: answers.mode,
-      line,
-    });
+    try {
+      await (deps.rehearse ?? sandboxRehearsal)({
+        paths,
+        belief: answers.belief,
+        maxBidSol: answers.maxBid,
+        dailyCapSol: answers.dailyCap,
+        mode: answers.mode,
+        line,
+      });
+    } catch (err) {
+      rehearsed = false;
+      line(`SANDBOX Rehearsal did not finish: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // 7. The closing lines.
@@ -418,6 +425,14 @@ async function init(args: InitArgs, deps: InitDeps, io: InitIo): Promise<void> {
       "Your per-bid limit is below the board's minimum. The price only goes up, so this agent cannot post until you raise MAX_BID_SOL in .env.",
     );
   }
+  if (!rehearsed) {
+    io.writeErr(
+      `${PACKAGE_NAME}: init: the files are written, but the sandbox rehearsal did not finish ` +
+        '(see the SANDBOX line above). Run init again with --force to retry it.\n',
+    );
+    return 1;
+  }
+  return 0;
 }
 
 function importFlagKeypair(path: string, cwd: string): WalletInfo {
