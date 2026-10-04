@@ -554,6 +554,16 @@ describeDist('dist/cli.js', () => {
     expect(existsSync(join(dir, 'logs'))).toBe(false);
   });
 
+  it('report in a folder with no logs prints No activity yet. and exits 0', () => {
+    const r = run(['report']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('No activity yet.\n');
+    expect(r.stderr).toBe('');
+    const json = run(['report', '--json']);
+    expect(json.status).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({ empty: true, acquisitions: [] });
+  });
+
   it('a keypair without MAX_BID_SOL is a fatal config error naming the variable', () => {
     const r = spawnSync(process.execPath, [cliPath], {
       encoding: 'utf8',
