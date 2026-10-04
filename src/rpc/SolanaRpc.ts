@@ -72,6 +72,7 @@ export interface ConnectionLike {
   ): number;
   removeAccountChangeListener(id: number): Promise<void>;
   getBlockTime(slot: number): Promise<number | null>;
+  getBalance(publicKey: PublicKey, commitment?: Commitment): Promise<number>;
 }
 
 export interface SolanaRpcOptions {
@@ -265,6 +266,17 @@ export class SolanaRpc implements Rpc {
 
   async getBlockTime(slot: number): Promise<number | null> {
     return this.request('getBlockTime', () => this.conn.getBlockTime(slot));
+  }
+
+  /**
+   * Lamports held by `pubkey`. Read-only; not part of `Rpc` because only the
+   * runner's affordability gate needs it (see `RunnerRpc` in agent/runner.ts).
+   */
+  async getBalance(pubkey: PublicKey): Promise<bigint> {
+    const lamports = await this.request('getBalance', () =>
+      this.conn.getBalance(pubkey, COMMITMENT),
+    );
+    return BigInt(lamports);
   }
 }
 

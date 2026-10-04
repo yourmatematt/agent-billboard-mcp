@@ -20,7 +20,8 @@
  *
  * What is not modelled: lamport balances and fees. Payments are recorded in
  * `transfers` so tests can assert who receives what, but no account is ever
- * short of funds.
+ * short of funds. `getBalance` returns whatever `setBalance` last set for an
+ * address (0 when never set); transactions do not change it.
  *
  * `reference/` holds the IDL, not the Rust source. For `append` and `clear` the
  * non-poster rejection is assumed to be Anchor's `ConstraintAddress` (2012),
@@ -122,6 +123,7 @@ export class MockRpc implements Rpc {
   private readonly txs: TransactionLogs[] = [];
   private readonly listeners = new Set<AccountChangeCallback>();
   private pendingFailure: RpcError | null = null;
+  private readonly balances = new Map<string, bigint>();
 
   /** Every lamport transfer the program made, in order. */
   readonly transfers: MockTransfer[] = [];
@@ -214,6 +216,21 @@ export class MockRpc implements Rpc {
   // -------------------------------------------------------------------------
   // Rpc
   // -------------------------------------------------------------------------
+
+  /** Sets what `getBalance` reports for `pubkey`, in lamports. */
+  setBalance(pubkey: PublicKey, lamports: bigint): void {
+    if (typeof lamports !== 'bigint' || lamports < 0n) {
+      throw new Error(
+        `setBalance needs non-negative lamports as a bigint, got ${String(lamports)}`,
+      );
+    }
+    this.balances.set(pubkey.toBase58(), lamports);
+  }
+
+  /** Lamports set for `pubkey` with `setBalance`, or 0. */
+  async getBalance(pubkey: PublicKey): Promise<bigint> {
+    return this.balances.get(pubkey.toBase58()) ?? 0n;
+  }
 
   async getAccount(pubkey: PublicKey): Promise<Buffer | null> {
     if (!pubkey.equals(BILLBOARD_ADDRESS)) return null;

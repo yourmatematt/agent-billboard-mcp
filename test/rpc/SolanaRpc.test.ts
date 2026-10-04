@@ -30,6 +30,7 @@ function fakeConnection(overrides: Partial<ConnectionLike> = {}): ConnectionLike
     onAccountChange: () => 1,
     removeAccountChangeListener: async () => undefined,
     getBlockTime: never,
+    getBalance: never,
     ...overrides,
   };
 }
@@ -116,6 +117,31 @@ describe('SolanaRpc', () => {
       name: 'RpcError',
       kind: 'timeout',
       message: 'getAccountInfo timed out after 10 ms',
+    });
+  });
+
+  it('getBalance returns lamports as a bigint, read at confirmed, and times out', async () => {
+    let commitment: string | undefined;
+    const rpc = new SolanaRpc({
+      rpcUrl: 'https://example.invalid',
+      connection: fakeConnection({
+        getBalance: async (_key, c) => {
+          commitment = c;
+          return 123_456_789;
+        },
+      }),
+    });
+    expect(await rpc.getBalance(BILLBOARD_ADDRESS)).toBe(123_456_789n);
+    expect(commitment).toBe('confirmed');
+    const hung = new SolanaRpc({
+      rpcUrl: 'https://example.invalid',
+      requestTimeoutMs: 10,
+      connection: fakeConnection(),
+    });
+    await expect(hung.getBalance(BILLBOARD_ADDRESS)).rejects.toMatchObject({
+      name: 'RpcError',
+      kind: 'timeout',
+      message: 'getBalance timed out after 10 ms',
     });
   });
 
