@@ -7,7 +7,10 @@ import bs58 from 'bs58';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  AGENT_COMMANDS,
   CONFIG_HELP,
+  DEFAULT_INIT_DIR,
+  commandHelpText,
   formatBanner,
   helpText,
   isMainModule,
@@ -58,6 +61,260 @@ describe('parseArgs', () => {
   });
 });
 
+describe('parseArgs: commands', () => {
+  const initDefaults = {
+    dir: DEFAULT_INIT_DIR,
+    belief: null,
+    maxBid: null,
+    dailyCap: null,
+    mode: null,
+    newWallet: false,
+    keypair: null,
+    model: null,
+    yes: false,
+    force: false,
+    skipRehearsal: false,
+  };
+  const runDefaults = {
+    dir: '.',
+    sandbox: false,
+    once: false,
+    dryRun: false,
+    claude: null,
+    model: null,
+    minutes: null,
+  };
+
+  it('init with no flags: default folder, everything else unset', () => {
+    expect(parseArgs(['init'])).toEqual({ kind: 'init', args: initDefaults });
+  });
+  it('init with every flag, in both --flag value and --flag=value forms', () => {
+    expect(
+      parseArgs([
+        'init',
+        'my-agent',
+        '--belief',
+        'Small shops beat chains.',
+        '--max-bid=0.2',
+        '--daily-cap',
+        '0.5',
+        '--mode',
+        'auto',
+        '--new-wallet',
+        '--model',
+        'claude-sonnet-5',
+        '--yes',
+        '--force',
+        '--skip-rehearsal',
+      ]),
+    ).toEqual({
+      kind: 'init',
+      args: {
+        dir: 'my-agent',
+        belief: 'Small shops beat chains.',
+        maxBid: '0.2',
+        dailyCap: '0.5',
+        mode: 'auto',
+        newWallet: true,
+        keypair: null,
+        model: 'claude-sonnet-5',
+        yes: true,
+        force: true,
+        skipRehearsal: true,
+      },
+    });
+  });
+  it('init keeps a belief that starts with a single dash, and one passed with =', () => {
+    const a = parseArgs(['init', '--belief', '-a dash first']);
+    expect(a.kind === 'init' && a.args.belief).toBe('-a dash first');
+    const b = parseArgs(['init', '--belief=--two dashes']);
+    expect(b.kind === 'init' && b.args.belief).toBe('--two dashes');
+  });
+  it('init --keypair takes a path', () => {
+    expect(parseArgs(['init', '--keypair', 'C:\\keys\\id.json', '--mode', 'propose'])).toEqual({
+      kind: 'init',
+      args: { ...initDefaults, keypair: 'C:\\keys\\id.json', mode: 'propose' },
+    });
+  });
+  it('init refuses a bad mode, both wallet choices, and a missing value', () => {
+    expect(parseArgs(['init', '--mode', 'yolo'])).toEqual({
+      kind: 'error',
+      message: 'init: --mode must be auto or propose, not yolo',
+    });
+    expect(parseArgs(['init', '--new-wallet', '--keypair', 'k.json'])).toEqual({
+      kind: 'error',
+      message: 'init: --new-wallet and --keypair cannot be used together',
+    });
+    expect(parseArgs(['init', '--belief'])).toEqual({
+      kind: 'error',
+      message: 'init: --belief needs a value',
+    });
+    expect(parseArgs(['init', '--max-bid', '--yes'])).toEqual({
+      kind: 'error',
+      message: 'init: --max-bid needs a value',
+    });
+    expect(parseArgs(['init', '--max-bid='])).toEqual({
+      kind: 'error',
+      message: 'init: --max-bid needs a value',
+    });
+  });
+
+  it('run with no flags: this folder, live, looping', () => {
+    expect(parseArgs(['run'])).toEqual({ kind: 'run', args: runDefaults });
+  });
+  it('run --sandbox implies --once', () => {
+    expect(parseArgs(['run', '--sandbox'])).toEqual({
+      kind: 'run',
+      args: { ...runDefaults, sandbox: true, once: true },
+    });
+  });
+  it('run with every flag', () => {
+    expect(
+      parseArgs([
+        'run',
+        'agents/one',
+        '--once',
+        '--dry-run',
+        '--claude',
+        '/opt/claude',
+        '--model',
+        'claude-haiku-4-5',
+        '--minutes',
+        '2',
+      ]),
+    ).toEqual({
+      kind: 'run',
+      args: {
+        dir: 'agents/one',
+        sandbox: false,
+        once: true,
+        dryRun: true,
+        claude: '/opt/claude',
+        model: 'claude-haiku-4-5',
+        minutes: 2,
+      },
+    });
+    const r = parseArgs(['run', '--minutes=0.5']);
+    expect(r.kind === 'run' && r.args.minutes).toBe(0.5);
+  });
+  it('run refuses minutes that are not a positive number', () => {
+    for (const bad of ['0', '-1', 'ten', '1e3', 'Infinity']) {
+      expect(parseArgs(['run', `--minutes=${bad}`])).toEqual({
+        kind: 'error',
+        message: `run: --minutes must be a positive number, not ${bad}`,
+      });
+    }
+  });
+
+  it('report: defaults, --sandbox and --json', () => {
+    expect(parseArgs(['report'])).toEqual({
+      kind: 'report',
+      args: { dir: '.', sandbox: false, json: false },
+    });
+    expect(parseArgs(['report', 'x', '--json', '--sandbox'])).toEqual({
+      kind: 'report',
+      args: { dir: 'x', sandbox: true, json: true },
+    });
+  });
+
+  it('<command> --help and -h, anywhere after the command, win over flag errors', () => {
+    for (const command of AGENT_COMMANDS) {
+      expect(parseArgs([command, '--help'])).toEqual({ kind: 'command-help', command });
+      expect(parseArgs([command, 'dir', '-h'])).toEqual({ kind: 'command-help', command });
+    }
+    expect(parseArgs(['init', '--mode', 'yolo', '--help'])).toEqual({
+      kind: 'command-help',
+      command: 'init',
+    });
+  });
+
+  it('an unknown command names itself and the real ones', () => {
+    expect(parseArgs(['serve'])).toEqual({
+      kind: 'error',
+      message: 'unknown command: serve (commands: init, run, report)',
+    });
+    expect(parseArgs(['INIT'])).toMatchObject({ kind: 'error' });
+  });
+  it("an unknown flag names the flag and the command, including another command's flag", () => {
+    expect(parseArgs(['init', '--bogus'])).toEqual({
+      kind: 'error',
+      message: 'init: unknown flag: --bogus',
+    });
+    expect(parseArgs(['report', '--claude', 'x'])).toEqual({
+      kind: 'error',
+      message: 'report: unknown flag: --claude',
+    });
+    expect(parseArgs(['run', '--belief=x'])).toEqual({
+      kind: 'error',
+      message: 'run: unknown flag: --belief',
+    });
+    expect(parseArgs(['run', '-x'])).toEqual({ kind: 'error', message: 'run: unknown flag: -x' });
+    expect(parseArgs(['run', '--version'])).toEqual({
+      kind: 'error',
+      message: 'run: unknown flag: --version',
+    });
+  });
+  it('refuses a second folder, a repeated flag and a value on a switch', () => {
+    expect(parseArgs(['run', 'a', 'b'])).toEqual({
+      kind: 'error',
+      message: 'run: unexpected argument: b (one folder only)',
+    });
+    expect(parseArgs(['init', '--yes', '--yes'])).toEqual({
+      kind: 'error',
+      message: 'init: --yes given twice',
+    });
+    expect(parseArgs(['report', '--json=true'])).toEqual({
+      kind: 'error',
+      message: 'report: --json takes no value',
+    });
+  });
+  it('a command after a global flag is still an unknown argument, as in 0.4.0', () => {
+    expect(parseArgs(['--help', 'init'])).toEqual({
+      kind: 'error',
+      message: 'unknown argument: init',
+    });
+  });
+});
+
+describe('commandHelpText', () => {
+  const flags: Record<string, string[]> = {
+    init: [
+      '--belief',
+      '--max-bid',
+      '--daily-cap',
+      '--mode',
+      '--new-wallet',
+      '--keypair',
+      '--model',
+      '--yes',
+      '--force',
+      '--skip-rehearsal',
+    ],
+    run: ['--sandbox', '--once', '--dry-run', '--claude', '--model', '--minutes'],
+    report: ['--sandbox', '--json'],
+  };
+  it('lists every flag each command accepts', () => {
+    for (const command of AGENT_COMMANDS) {
+      const text = commandHelpText(command);
+      expect(text).toContain(`Usage: ${PACKAGE_NAME} ${command} [dir]`);
+      for (const flag of flags[command]!) expect(text).toContain(flag);
+    }
+  });
+  it('every flag it lists is one the parser accepts', () => {
+    for (const command of AGENT_COMMANDS) {
+      for (const flag of flags[command]!) {
+        const r = parseArgs([command, `${flag}=x`]);
+        if (r.kind === 'error') expect(r.message).not.toContain('unknown flag');
+      }
+    }
+  });
+  it("run's help says every wake is a model call on the operator's own account", () => {
+    expect(commandHelpText('run')).toContain(
+      'Every wake is a model call on your own Claude account and usage.',
+    );
+  });
+});
+
 describe('version', () => {
   it('matches package.json', async () => {
     const pkg = (await import('../package.json', { with: { type: 'json' } })).default as {
@@ -83,6 +340,19 @@ describe('helpText', () => {
     expect(text).toContain(PROGRAM_ID.toBase58());
     expect(text).toContain(BILLBOARD_ADDRESS.toBase58());
     expect(text).toContain(PACKAGE_VERSION);
+  });
+  it('keeps the 0.4.0 usage lines and adds a Commands block naming init, run and report', () => {
+    const text = helpText();
+    expect(text).toContain(
+      `  ${PACKAGE_NAME}            start the server on stdin/stdout (for an MCP client)`,
+    );
+    expect(text).toContain(`  ${PACKAGE_NAME} --help     print this text`);
+    expect(text).toContain(`  ${PACKAGE_NAME} --version  print the version`);
+    expect(text).toContain('Commands (each has its own help');
+    for (const command of AGENT_COMMANDS) {
+      expect(text).toMatch(new RegExp(`^  ${command} \\[dir\\]`, 'm'));
+    }
+    expect(text.indexOf('Commands (')).toBeLessThan(text.indexOf('Modes (chosen by environment)'));
   });
 });
 
@@ -237,6 +507,31 @@ describeDist('dist/cli.js', () => {
     expect(r.stdout).toBe('');
     expect(r.stderr).toContain('unknown argument: --bogus');
     expect(r.stderr).toContain('--help');
+  });
+
+  it("<command> --help prints that command's help to stdout and exits 0", () => {
+    for (const command of AGENT_COMMANDS) {
+      const r = run([command, '--help']);
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim()).toBe(commandHelpText(command));
+      expect(r.stderr).toBe('');
+    }
+  });
+
+  it('an unknown command exits 2 naming it, with the general hint', () => {
+    const r = run(['frobnicate']);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain('unknown command: frobnicate');
+    expect(r.stderr).toContain(`Run '${PACKAGE_NAME} --help'`);
+  });
+
+  it("an unknown flag on a command exits 2 naming it, with that command's hint", () => {
+    const r = run(['run', '--bogus']);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain('run: unknown flag: --bogus');
+    expect(r.stderr).toContain(`Run '${PACKAGE_NAME} run --help'`);
   });
 
   it('a keypair without MAX_BID_SOL is a fatal config error naming the variable', () => {

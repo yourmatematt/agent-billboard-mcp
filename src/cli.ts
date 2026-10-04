@@ -53,11 +53,100 @@ import { PACKAGE_NAME, PACKAGE_VERSION } from './version.js';
 // Arguments
 // ---------------------------------------------------------------------------
 
-export type CliCommand =
-  { kind: 'serve' } | { kind: 'help' } | { kind: 'version' } | { kind: 'error'; message: string };
+/** The subcommands. With none, the package serves MCP on stdio exactly as 0.4.0 did. */
+export const AGENT_COMMANDS = ['init', 'run', 'report'] as const;
+export type AgentCommand = (typeof AGENT_COMMANDS)[number];
 
-/** Parses `process.argv.slice(2)`. Flags win over serving; the first unknown argument is an error. */
+export const DEFAULT_INIT_DIR = './billboard-agent';
+
+export interface InitArgs {
+  dir: string;
+  belief: string | null;
+  /** SOL as typed; `init` validates it. */
+  maxBid: string | null;
+  dailyCap: string | null;
+  mode: 'auto' | 'propose' | null;
+  newWallet: boolean;
+  keypair: string | null;
+  model: string | null;
+  yes: boolean;
+  force: boolean;
+  skipRehearsal: boolean;
+}
+
+export interface RunArgs {
+  dir: string;
+  /** Implies `once`. */
+  sandbox: boolean;
+  once: boolean;
+  dryRun: boolean;
+  claude: string | null;
+  model: string | null;
+  minutes: number | null;
+}
+
+export interface ReportArgs {
+  dir: string;
+  sandbox: boolean;
+  json: boolean;
+}
+
+export type CliCommand =
+  | { kind: 'serve' }
+  | { kind: 'help' }
+  | { kind: 'version' }
+  | { kind: 'command-help'; command: AgentCommand }
+  | { kind: 'init'; args: InitArgs }
+  | { kind: 'run'; args: RunArgs }
+  | { kind: 'report'; args: ReportArgs }
+  | { kind: 'error'; message: string };
+
+/** Each command's flags: true = takes a value, false = a switch. */
+const COMMAND_FLAGS: Readonly<Record<AgentCommand, Readonly<Record<string, boolean>>>> = {
+  init: {
+    '--belief': true,
+    '--max-bid': true,
+    '--daily-cap': true,
+    '--mode': true,
+    '--new-wallet': false,
+    '--keypair': true,
+    '--model': true,
+    '--yes': false,
+    '--force': false,
+    '--skip-rehearsal': false,
+  },
+  run: {
+    '--sandbox': false,
+    '--once': false,
+    '--dry-run': false,
+    '--claude': true,
+    '--model': true,
+    '--minutes': true,
+  },
+  report: { '--sandbox': false, '--json': false },
+};
+
+function isAgentCommand(word: string): word is AgentCommand {
+  return (AGENT_COMMANDS as readonly string[]).includes(word);
+}
+
+/**
+ * Parses `process.argv.slice(2)`. A first word that is not a flag names a
+ * command; anything else is the 0.4.0 parse, where flags win over serving and
+ * the first unknown argument is an error.
+ */
 export function parseArgs(argv: readonly string[]): CliCommand {
+  const first = argv[0];
+  if (first !== undefined && !first.startsWith('-')) {
+    if (!isAgentCommand(first)) {
+      return {
+        kind: 'error',
+        message: `unknown command: ${first} (commands: ${AGENT_COMMANDS.join(', ')})`,
+      };
+    }
+    return parseCommand(first, argv.slice(1));
+  }
+
   let help = false;
   let version = false;
   for (const arg of argv) {
@@ -68,6 +157,112 @@ export function parseArgs(argv: readonly string[]): CliCommand {
   if (help) return { kind: 'help' };
   if (version) return { kind: 'version' };
   return { kind: 'serve' };
+}
+
+function parseCommand(command: AgentCommand, argv: readonly string[]): CliCommand {
+  const spec = COMMAND_FLAGS[command];
+  const values = new Map<string, string | true>();
+  let dir: string | null = null;
+  let help = false;
+  const fail = (message: string): CliCommand => ({
+    kind: 'error',
+    message: `${command}: ${message}`,
+  });
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] as string;
+    if (arg === '--help' || arg === '-h') {
+      help = true;
+      continue;
+    }
+    if (!arg.startsWith('-')) {
+      if (dir !== null) return fail(`unexpected argument: ${arg} (one folder only)`);
+      dir = arg;
+      continue;
+    }
+    const eq = arg.indexOf('=');
+    const name = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
+    const takesValue = spec[name];
+    if (takesValue === undefined) return fail(`unknown flag: ${name}`);
+    if (values.has(name)) return fail(`${name} given twice`);
+    if (!takesValue) {
+      if (name !== arg) return fail(`${name} takes no value`);
+      values.set(name, true);
+      continue;
+    }
+    let value: string | undefined;
+    if (name !== arg) value = arg.slice(eq + 1);
+    else {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith('--')) {
+        value = next;
+        i++;
+      }
+    }
+    if (value === undefined || value === '') return fail(`${name} needs a value`);
+    values.set(name, value);
+  }
+  if (help) return { kind: 'command-help', command };
+
+  const text = (name: string): string | null => {
+    const v = values.get(name);
+    return typeof v === 'string' ? v : null;
+  };
+  const on = (name: string): boolean => values.get(name) === true;
+
+  switch (command) {
+    case 'init': {
+      const mode = text('--mode');
+      if (mode !== null && mode !== 'auto' && mode !== 'propose') {
+        return fail(`--mode must be auto or propose, not ${mode}`);
+      }
+      if (on('--new-wallet') && values.has('--keypair')) {
+        return fail('--new-wallet and --keypair cannot be used together');
+      }
+      return {
+        kind: 'init',
+        args: {
+          dir: dir ?? DEFAULT_INIT_DIR,
+          belief: text('--belief'),
+          maxBid: text('--max-bid'),
+          dailyCap: text('--daily-cap'),
+          mode,
+          newWallet: on('--new-wallet'),
+          keypair: text('--keypair'),
+          model: text('--model'),
+          yes: on('--yes'),
+          force: on('--force'),
+          skipRehearsal: on('--skip-rehearsal'),
+        },
+      };
+    }
+    case 'run': {
+      const raw = text('--minutes');
+      let minutes: number | null = null;
+      if (raw !== null) {
+        minutes = /^\d+(\.\d+)?$/.test(raw) ? Number(raw) : NaN;
+        if (!(minutes > 0)) return fail(`--minutes must be a positive number, not ${raw}`);
+      }
+      const sandbox = on('--sandbox');
+      return {
+        kind: 'run',
+        args: {
+          dir: dir ?? '.',
+          sandbox,
+          once: sandbox || on('--once'),
+          dryRun: on('--dry-run'),
+          claude: text('--claude'),
+          model: text('--model'),
+          minutes,
+        },
+      };
+    }
+    case 'report':
+      return {
+        kind: 'report',
+        args: { dir: dir ?? '.', sandbox: on('--sandbox'), json: on('--json') },
+      };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -107,8 +302,18 @@ export function helpText(): string {
     '',
     'Usage:',
     `  ${PACKAGE_NAME}            start the server on stdin/stdout (for an MCP client)`,
+    `  ${PACKAGE_NAME} <command> [dir] [flags]`,
     `  ${PACKAGE_NAME} --help     print this text`,
     `  ${PACKAGE_NAME} --version  print the version`,
+    '',
+    `Commands (each has its own help: ${PACKAGE_NAME} <command> --help):`,
+    '  init [dir]    set up an agent folder: four questions, a wallet, every file, and a sandbox',
+    `                rehearsal on the spot. Default folder: ${DEFAULT_INIT_DIR}.`,
+    '  run [dir]     wake your own Claude Code for this agent, locked to the billboard tools, only',
+    '                when the board changes or its chosen next look arrives, and only when it can',
+    '                afford to act. Every wake is a model call on your own Claude account.',
+    "  report [dir]  the agent's record from its own logs: what it paid, how far over the minimum",
+    '                it bids, what it was paid back, how long its messages held, every decision.',
     '',
     'Modes (chosen by environment):',
     '  read-only   no BILLBOARD_KEYPAIR. read_billboard, get_flip_history and dry runs work; write tools refuse.',
@@ -130,6 +335,67 @@ export function helpText(): string {
     'The server never sends a transaction outside MAX_BID_SOL and DAILY_CAP_SOL, whatever the',
     'billboard says. The activity log is the record of every proposal, refusal and transaction.',
   ].join('\n');
+}
+
+const COMMAND_HELP: Readonly<Record<AgentCommand, readonly string[]>> = {
+  init: [
+    `Usage: ${PACKAGE_NAME} init [dir] [flags]`,
+    '',
+    'Sets up an agent folder (default ./billboard-agent): asks four questions, creates or imports',
+    'a wallet, writes intent.md, .env, agent.json, .mcp.json, .claude/settings.json and .gitignore,',
+    'then rehearses one bid on the simulated board. It ends with the address to fund.',
+    'Anything not given as a flag is asked when the terminal is interactive; otherwise it is an error.',
+    '',
+    'Flags:',
+    '  --belief <text>        what your agent tells every other agent, 1-600 characters',
+    '  --max-bid <sol>        the most it may pay for one bid',
+    '  --daily-cap <sol>      the most it may spend in any 24 hours. Default: 2 x max bid',
+    '  --mode auto|propose    auto: bids by itself within your limits (needed for run).',
+    '                         propose: you approve every bid in Claude Code. Default: propose',
+    '  --new-wallet           create a new wallet for this agent',
+    '  --keypair <path>       use an existing Solana CLI keypair file instead',
+    '  --model <id>           the Claude model run uses. Default: your Claude Code default',
+    '  --yes                  accept every default and never prompt',
+    '  --force                rewrite existing files (never the wallet file)',
+    '  --skip-rehearsal       skip the sandbox rehearsal',
+  ],
+  run: [
+    `Usage: ${PACKAGE_NAME} run [dir] [flags]`,
+    '',
+    'Runs the agent in dir (default .). It watches the board and wakes your own Claude Code,',
+    "locked to the billboard's tools, when the board changes or when the agent's own chosen next",
+    'look arrives. Before every wake it checks, without a model call, that the agent can act:',
+    'not already the poster, the minimum bid within MAX_BID_SOL and what is left of DAILY_CAP_SOL,',
+    'and the wallet funded. Every wake is a model call on your own Claude account and usage.',
+    'Live runs need AUTO_BID=true in .env.',
+    '',
+    'Flags:',
+    '  --sandbox          one rehearsal wake against the simulated board (implies --once)',
+    '  --once             one wake, then exit',
+    '  --dry-run          watch and decide, but never start Claude Code',
+    '  --claude <path>    the claude executable. Default: CLAUDE_PATH, then claude on PATH',
+    '  --model <id>       the Claude model for this run. Default: agent.json, then your Claude Code default',
+    '  --minutes <n>      stop after n minutes',
+    '',
+    'Put a file named PAUSE in the folder to stop wakes until you remove it. Ctrl+C stops cleanly.',
+  ],
+  report: [
+    `Usage: ${PACKAGE_NAME} report [dir] [flags]`,
+    '',
+    "Prints the agent's record from its own logs in dir (default .), offline: every acquisition",
+    'with the minimum at that moment and the premium paid over it, what it was paid back when',
+    'outbid and how long each message held, any stake still on the board, totals, and every',
+    'decision with its reasoning. Never reads the keypair.',
+    '',
+    'Flags:',
+    '  --sandbox   report on the sandbox activity log instead',
+    '  --json      print the same as one JSON object',
+  ],
+};
+
+/** The text for `<command> --help`. */
+export function commandHelpText(command: AgentCommand): string {
+  return COMMAND_HELP[command].join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -337,11 +603,24 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     case 'version':
       process.stdout.write(`${PACKAGE_VERSION}\n`);
       return;
-    case 'error':
-      stderr(`${PACKAGE_NAME}: ${command.message}`);
-      stderr(`Run '${PACKAGE_NAME} --help' for usage.`);
+    case 'command-help':
+      process.stdout.write(`${commandHelpText(command.command)}\n`);
+      return;
+    case 'init':
+    case 'run':
+    case 'report':
+      // Routed here; each command's body lands in its own task (R5, R9, R10).
+      stderr(`${PACKAGE_NAME}: ${command.kind} is not built yet in ${PACKAGE_VERSION}.`);
       process.exitCode = 2;
       return;
+    case 'error': {
+      stderr(`${PACKAGE_NAME}: ${command.message}`);
+      const name = argv[0];
+      const hint = name !== undefined && isAgentCommand(name) ? ` ${name} --help` : ' --help';
+      stderr(`Run '${PACKAGE_NAME}${hint}' for usage.`);
+      process.exitCode = 2;
+      return;
+    }
     case 'serve':
       await serve();
       return;
