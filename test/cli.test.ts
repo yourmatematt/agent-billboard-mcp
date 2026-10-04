@@ -545,6 +545,15 @@ describeDist('dist/cli.js', () => {
     expect(existsSync(join(dir, 'billboard-agent'))).toBe(false);
   });
 
+  it('run in a folder that is not an agent exits 2 with one sentence, starting nothing', () => {
+    const r = run(['run']);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain(`run: There is no .env in ${dir}.`);
+    expect(r.stderr).toContain(`Run '${PACKAGE_NAME} run --help'`);
+    expect(existsSync(join(dir, 'logs'))).toBe(false);
+  });
+
   it('a keypair without MAX_BID_SOL is a fatal config error naming the variable', () => {
     const r = spawnSync(process.execPath, [cliPath], {
       encoding: 'utf8',

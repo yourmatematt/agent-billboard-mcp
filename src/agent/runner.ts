@@ -835,10 +835,50 @@ export class Runner {
     }
   }
 
+  /**
+   * One wake the operator asked for (`--once`, `--sandbox`): a fresh read of
+   * the board, the gate on it, then the wake. The rails are not applied (the
+   * operator chose this wake), PAUSE still is. In the sandbox there is no read
+   * and no gate: the simulated board lives inside the model's own server.
+   */
+  async once(): Promise<OnceResult> {
+    if (this.paused()) {
+      this.log('paused', { due: 'manual' });
+      return 'paused';
+    }
+    if (!this.sandbox) {
+      if (!(await this.poll())) return 'unreadable';
+      const gate = await this.gate(this.now());
+      if (!gate.pass) return 'blocked';
+    }
+    const before = this.state.last_wake_at;
+    await this.wake('manual');
+    this.save();
+    return this.state.last_wake_at !== before ? 'woke' : 'not_started';
+  }
+
   stop(reason: string): void {
     this.log('stopped', { reason });
     this.save();
   }
+}
+
+/** How a one-off wake ended. `blocked`: the gate said the agent cannot act (logged why). */
+export type OnceResult = 'woke' | 'paused' | 'unreadable' | 'blocked' | 'not_started';
+
+/** Runs one operator-started wake from start to stop. */
+export async function runOnce(
+  runner: Runner,
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<OnceResult> {
+  runner.start();
+  let result: OnceResult;
+  try {
+    result = await runner.once();
+  } finally {
+    runner.stop(signal?.aborted ? 'signal' : 'once');
+  }
+  return result;
 }
 
 export type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>;
