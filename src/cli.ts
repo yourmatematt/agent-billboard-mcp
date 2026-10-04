@@ -35,6 +35,7 @@ import {
   type Config,
   type ConfigVar,
 } from './config.js';
+import { runInit } from './agent/init.js';
 import { IntentError, readIntent, type IntentFile } from './intent.js';
 import { BILLBOARD_ADDRESS, PROGRAM_ID, deriveBillboardPda } from './program/layout.js';
 import { lamportsToSol } from './program/math.js';
@@ -607,9 +608,11 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       process.stdout.write(`${commandHelpText(command.command)}\n`);
       return;
     case 'init':
+      process.exitCode = await runInit(command.args);
+      return;
     case 'run':
     case 'report':
-      // Routed here; each command's body lands in its own task (R5, R9, R10).
+      // Routed here; each command's body lands in its own task (R9, R10).
       stderr(`${PACKAGE_NAME}: ${command.kind} is not built yet in ${PACKAGE_VERSION}.`);
       process.exitCode = 2;
       return;

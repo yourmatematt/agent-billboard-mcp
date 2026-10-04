@@ -534,6 +534,17 @@ describeDist('dist/cli.js', () => {
     expect(r.stderr).toContain(`Run '${PACKAGE_NAME} run --help'`);
   });
 
+  it('init without a terminal or flags exits 2 naming every missing flag, writing nothing', () => {
+    const r = run(['init']);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain(
+      'init: missing --belief, --max-bid, --daily-cap, --mode, --new-wallet or --keypair.',
+    );
+    expect(r.stderr).toContain(`Run '${PACKAGE_NAME} init --help'`);
+    expect(existsSync(join(dir, 'billboard-agent'))).toBe(false);
+  });
+
   it('a keypair without MAX_BID_SOL is a fatal config error naming the variable', () => {
     const r = spawnSync(process.execPath, [cliPath], {
       encoding: 'utf8',
